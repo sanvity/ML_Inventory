@@ -17,10 +17,12 @@ router = APIRouter()
 class PredictRequest(BaseModel):
     session_id:  str
     input_data:  dict
+    model_id:    str | None = None
 
 
 class BatchPredictRequest(BaseModel):
     session_id: str
+    model_id:   str | None = None
 
 
 @router.post("/predict")
@@ -29,7 +31,14 @@ async def predict(req: PredictRequest):
     if sid not in SESSIONS:
         raise HTTPException(404, "Session not found.")
     sess = SESSIONS[sid]
-    model = sess.get("best_model")
+    
+    model = None
+    if req.model_id:
+        trained_models = sess.get("trained_models", {})
+        model = trained_models.get(req.model_id)
+    if model is None:
+        model = sess.get("best_model")
+        
     if model is None:
         raise HTTPException(400, "No trained model found. Please train first.")
 
@@ -57,7 +66,14 @@ async def batch_predict(req: BatchPredictRequest):
     if sid not in SESSIONS:
         raise HTTPException(404, "Session not found.")
     sess  = SESSIONS[sid]
-    model = sess.get("best_model")
+    
+    model = None
+    if req.model_id:
+        trained_models = sess.get("trained_models", {})
+        model = trained_models.get(req.model_id)
+    if model is None:
+        model = sess.get("best_model")
+        
     if model is None:
         raise HTTPException(400, "No trained model found.")
 
@@ -76,8 +92,8 @@ async def batch_predict(req: BatchPredictRequest):
     except Exception as e:
         raise HTTPException(400, f"Batch prediction failed: {e}")
 
-    # Summary stats per model key (only best model for now)
-    best_key = sess.get("best_model_key", "model")
+    # Summary stats per model key
+    best_key = req.model_id if req.model_id else sess.get("best_model_key", "model")
     vals = [p for p in preds if not math.isnan(p) and not math.isinf(p)]
     batch_result = {
         best_key: {

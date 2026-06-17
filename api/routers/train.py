@@ -173,10 +173,13 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
             except Exception as e:
                 _update(sid, model_key, status="error", pct=100, error=str(e))
 
-        # ── 5. Store best model ──────────────────────────────────────────
+        # ── 5. Store best model and all trained models ───────────────────
         if best_key:
             SESSIONS[sid]["best_model"]     = trained_models[best_key]["model"]
             SESSIONS[sid]["best_model_key"] = best_key
+        SESSIONS[sid]["trained_models"] = {
+            key: td["model"] for key, td in trained_models.items()
+        }
 
         # ── 6. Build results payload ─────────────────────────────────────
         results_payload = {}

@@ -6,7 +6,18 @@ This document details the modifications and implementations completed on the Int
 
 ## Key Achievements
 
-### 1. Data Ingestion Capping & Heuristics
+### 1. Correlation-Based Feature Autoselection (Page 1)
+- Modified feature recommendation heuristics in `computeFeatureStatuses` to retain low-correlation features ($|r| < 0.10$) as selected by default.
+- Implemented data leakage filters that automatically deselect features with $|r| \ge 0.95$ and label them with a "Leakage risk" warning badge.
+- Weak features (ID-like fields, high null percentage, or columns with no variance) display descriptive warning badges but remain recommended/selected by default.
+
+### 2. Automatic Feature Engineering Synchronization
+- Added a state synchronization `useEffect` hook in `App.jsx` that monitors `selectedFeaturesList` and auto-populates defaults:
+  - **Categorical columns** are auto-added to `oneHotColumns` for categorical encoding.
+  - **Datetime components** (Month, Day of Week, Year, etc.) are auto-enabled for sin/cos cyclical encoding if their parent datetime columns are selected or if the dataset contains the active date column.
+  - The synchronization is non-destructive; Advanced Mode users can still customize preprocessing choices on Page 2 without their manual selections being overwritten.
+
+### 3. Data Ingestion Capping & Heuristics
 - Increased parsing limits in CSV, JSON, and Excel parsers to support up to **10,000 rows** for local ingestion.
 - Expanded target/feature heuristics to prioritize Pearson correlation, avoiding index column noise and correctly picking features by default.
 
@@ -87,7 +98,7 @@ transforming...
 rendering chunks...
 dist/index.html                     2.47 kB │ gzip:   1.09 kB
 dist/assets/index-C6G_3qQV.css      0.06 kB │ gzip:   0.06 kB
-dist/assets/index-BRMBriJC.js   1,013.03 kB │ gzip: 307.44 kB
-✓ built in 1.90s
+dist/assets/index-CLMUv7YN.js   1,018.58 kB │ gzip: 308.45 kB
+✓ built in 1.88s
 ```
 All components compile and build cleanly with zero errors.

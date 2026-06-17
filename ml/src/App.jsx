@@ -588,21 +588,18 @@ const computeFeatureStatuses = (db, target, dateCol) => {
       recommend = false;
     } else if (isDate) {
       recommend = false;
-    } else if (isIdField) {
-      warning = 'ID-like';
-      recommend = false;
-    } else if (isHighNulls) {
-      warning = 'High nulls';
-      recommend = false;
     } else if (isLeakage) {
       warning = 'Leakage risk';
       recommend = false;
-    } else if (isNoVariance) {
-      warning = 'No variance';
-      recommend = false;
     } else {
-      // Main correlation criteria
-      recommend = Math.abs(corr) >= 0.10;
+      recommend = true;
+      if (isIdField) {
+        warning = 'ID-like';
+      } else if (isHighNulls) {
+        warning = 'High nulls';
+      } else if (isNoVariance) {
+        warning = 'No variance';
+      }
     }
     
     statuses[col.name] = {
@@ -613,6 +610,51 @@ const computeFeatureStatuses = (db, target, dateCol) => {
   });
   
   return statuses;
+};
+
+const autoDetectGoal = (db, targetCol) => {
+  if (!db || !targetCol || targetCol === 'none') return { goal: '', problemSubtype: 'binary', dateColumn: '' };
+
+  const colMeta = db.columnsInfo.find(c => c.name === targetCol);
+  if (!colMeta) return { goal: '', problemSubtype: 'binary', dateColumn: '' };
+
+  // Check for a datetime column in the dataset
+  const dateCol = db.columnsInfo.find(c => c.type === 'datetime');
+  const hasDateColumn = !!dateCol;
+
+  if (colMeta.type === 'categorical') {
+    return {
+      goal: 'classification',
+      problemSubtype: colMeta.uniqueCount === 2 ? 'binary' : 'multiclass',
+      dateColumn: ''
+    };
+  }
+
+  if (colMeta.type === 'numeric') {
+    // Numeric with very few unique values → likely encoded classification
+    if (colMeta.uniqueCount <= 10) {
+      return {
+        goal: 'classification',
+        problemSubtype: colMeta.uniqueCount === 2 ? 'binary' : 'multiclass',
+        dateColumn: ''
+      };
+    }
+
+    // Numeric + datetime column present → forecasting
+    if (hasDateColumn) {
+      return {
+        goal: 'forecasting',
+        problemSubtype: 'binary',
+        dateColumn: dateCol.name
+      };
+    }
+
+    // Default numeric → regression
+    return { goal: 'regression', problemSubtype: 'binary', dateColumn: '' };
+  }
+
+  // Fallback
+  return { goal: 'regression', problemSubtype: 'binary', dateColumn: '' };
 };
 
 const isBestMetric = (metricName, metricValue, allRows) => {
@@ -1124,6 +1166,56 @@ export default function App() {
     setFeatureSelections(initialSelections);
   }, [featureStatuses]);
 
+  const prevFeaturesRef = useRef([]);
+  useEffect(() => {
+    if (!dataset) return;
+
+    const prevFeatures = prevFeaturesRef.current;
+    const added = selectedFeaturesList.filter(f => !prevFeatures.includes(f));
+    const removed = prevFeatures.filter(f => !selectedFeaturesList.includes(f));
+    
+    prevFeaturesRef.current = selectedFeaturesList;
+
+    // 1. Synchronize One-Hot Encoding
+    setOneHotColumns(prev => {
+      // Remove features no longer selected
+      let updated = prev.filter(c => selectedFeaturesList.includes(c));
+      // Auto-add newly added categorical features
+      added.forEach(f => {
+        const col = dataset.columnsInfo.find(c => c.name === f);
+        if (col && col.type === 'categorical' && !updated.includes(f)) {
+          updated.push(f);
+        }
+      });
+      return updated;
+    });
+
+    // 2. Synchronize Time Feature Encoding
+    setTimeComponentToggles(prev => {
+      const updated = { ...prev };
+      // Disable components for features removed (except dateColumn)
+      removed.forEach(f => {
+        if (f !== dateColumn) {
+          detectedTimeComponents.forEach(comp => {
+            if (comp.colName === f) {
+              updated[comp.id] = false;
+            }
+          });
+        }
+      });
+      // Enable components for newly added datetime/time features
+      added.forEach(f => {
+        detectedTimeComponents.forEach(comp => {
+          if (comp.colName === f) {
+            updated[comp.id] = comp.defaultChecked;
+          }
+        });
+      });
+      return updated;
+    });
+  }, [selectedFeaturesList, dataset, dateColumn, detectedTimeComponents]);
+
+
   // Autocomplete and initialize states when dataset or target changes
   const handleDatasetSelect = (selectedDb) => {
     setDataset(selectedDb);
@@ -1198,16 +1290,52 @@ export default function App() {
   // Handle Target column change dynamically recalculating pre-selections
   const handleTargetChange = (newTarget) => {
     setTargetColumn(newTarget);
-    setTargetConfirmed(false);
-    setSelectedModelOverride('');
     if (!dataset) return;
 
-    // Reset problem subtype if target is binary
-    const colMeta = dataset.columnsInfo.find(c => c.name === newTarget);
-    if (colMeta && colMeta.uniqueCount === 2) {
-      setProblemSubtype('binary');
+    if (!advancedMode && newTarget) {
+      // Simple Mode: auto-detect everything from target
+      const detected = autoDetectGoal(dataset, newTarget);
+      setGoal(detected.goal);
+      setProblemSubtype(detected.problemSubtype);
+      setDateColumn(detected.dateColumn);
+      setTargetConfirmed(true);
+
+      // Auto-select recommended model
+      const models = MODEL_REGISTRY[detected.goal] || [];
+      let recModelId = models[0]?.id || '';
+      if (detected.goal === 'classification') recModelId = 'rf_class';
+      else if (detected.goal === 'regression') recModelId = dataset.rows >= 500 ? 'lgbm_reg' : 'rf_reg';
+      else if (detected.goal === 'forecasting') recModelId = 'prophet_time';
+      setSelectedModelOverride(recModelId);
+      setSelectedModels(models.map(m => m.id));
+      setUserOverrodeModel(false);
+
+      // Set split method
+      if (detected.goal === 'forecasting') {
+        setSplitMethod('chronological');
+      } else {
+        setSplitMethod('random');
+      }
+
+      // Initialize hyperparameters for selected models
+      const hyperInits = {};
+      const collapseInits = {};
+      models.forEach(m => {
+        hyperInits[m.id] = { ...(m.hyperparameters || { epochs: 100, learning_rate: 0.1, batch_size: 32, regularization: 'none', lambda: 0.01, seed: 42 }) };
+        collapseInits[m.id] = true;
+      });
+      setHyperparameters(hyperInits);
+      setCollapsedHypers(collapseInits);
     } else {
-      setProblemSubtype('multiclass');
+      // Advanced mode — existing behavior
+      setTargetConfirmed(false);
+      setSelectedModelOverride('');
+      const colMeta = dataset.columnsInfo.find(c => c.name === newTarget);
+      if (colMeta && colMeta.uniqueCount === 2) {
+        setProblemSubtype('binary');
+      } else {
+        setProblemSubtype('multiclass');
+      }
     }
   };
 
@@ -1385,7 +1513,9 @@ export default function App() {
   };
 
   // Navigations & validations
-  const isPage1Valid = dataset && goal && (goal === 'clustering' ? true : (targetColumn && targetConfirmed)) && (advancedMode ? selectedModels.length > 0 : selectedModelOverride);
+  const isPage1Valid = advancedMode
+    ? (dataset && goal && (goal === 'clustering' ? true : (targetColumn && targetConfirmed)) && selectedModels.length > 0)
+    : (dataset && targetColumn && targetColumn !== '' && goal);
   const isPage2Valid = selectedFeaturesList.length > 0 && (splitMethod !== 'chronological' || dateColumn);
 
   const handleNextPage = () => {
@@ -2051,8 +2181,8 @@ export default function App() {
                 )}
               </section>
 
-              {/* SECTION B — WHAT DO YOU WANT TO DO? */}
-              {dataset && (
+              {/* SECTION B — WHAT DO YOU WANT TO DO? (Advanced Mode Only) */}
+              {advancedMode && dataset && (
                 <section className="space-y-6">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
@@ -2134,7 +2264,88 @@ export default function App() {
               )}
 
               {/* SECTION C — TARGET & FEATURE SETUP */}
-              {dataset && goal && (
+              {/* Simple Mode: streamlined "What do you want to predict?" */}
+              {!advancedMode && dataset && (
+                <section className="bg-gradient-to-br from-slate-50/60 to-indigo-50/30 dark:from-slate-800/30 dark:to-indigo-900/10 border border-slate-100 dark:border-slate-800 p-6 rounded-2xl space-y-5">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+                      <Settings className="w-5 h-5 text-indigo-500" />
+                      <span>What column are you trying to predict?</span>
+                    </h2>
+                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+                      Just pick the column you want to predict — we'll figure out the best approach automatically.
+                    </p>
+                  </div>
+
+                  <select
+                    value={targetColumn}
+                    onChange={(e) => handleTargetChange(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold shadow-sm"
+                  >
+                    <option value="">-- Select your target column --</option>
+                    {targetOptions.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+
+                  {/* Auto-detection summary card */}
+                  {targetColumn && goal && (
+                    <div className="bg-white dark:bg-slate-900 border border-indigo-500/15 dark:border-indigo-500/20 rounded-xl p-5 space-y-4 shadow-sm animate-fade-in">
+                      {/* Detected goal badge */}
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center space-x-2">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
+                            <CheckCircle className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="text-[9px] font-bold text-emerald-500 uppercase block tracking-wider">Auto-Detected</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-100 text-sm capitalize">{goal}{goal === 'classification' ? ` (${problemSubtype})` : ''}</span>
+                          </div>
+                        </div>
+
+                        <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 hidden md:block" />
+
+                        <div className="flex items-center space-x-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center font-bold text-[10px]">
+                            ★
+                          </div>
+                          <div>
+                            <span className="text-[9px] font-bold text-indigo-500 uppercase block tracking-wider">Recommended Model</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+                              {MODEL_REGISTRY[goal]?.find(m => m.id === selectedModelOverride)?.name || 'Auto'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 hidden md:block" />
+
+                        <div className="flex items-center space-x-2">
+                          <div className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 flex items-center justify-center">
+                            <FolderOpen className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase block tracking-wider">Features</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+                              {Object.values(featureStatuses).filter(s => s.recommend).length} columns auto-selected
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Explanation text */}
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed border-t border-slate-100 dark:border-slate-800/60 pt-3">
+                        {goal === 'classification' && `Your target "${targetColumn}" has ${dataset.columnsInfo.find(c => c.name === targetColumn)?.uniqueCount || '?'} unique values — we'll train classification models to predict categorical outcomes.`}
+                        {goal === 'regression' && `Your target "${targetColumn}" is a continuous numeric column — we'll train regression models to estimate its value.`}
+                        {goal === 'forecasting' && `Your target "${targetColumn}" is numeric and your dataset has a datetime column (${dateColumn}) — we'll use time series forecasting.`}
+                        {' '}All suitable models will be trained and the best performer will be auto-selected.
+                      </p>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* SECTION C — TARGET & FEATURE SETUP (Advanced Mode) */}
+              {advancedMode && dataset && goal && (
                 <section className="bg-slate-50/40 dark:bg-slate-800/25 border border-slate-100 dark:border-slate-800 p-6 rounded-2xl space-y-6">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">

@@ -810,6 +810,9 @@ export default function App() {
   const [triggerForecastUpdate, setTriggerForecastUpdate] = useState(0);
   const [hyperparameters, setHyperparameters] = useState({});
   const [collapsedHypers, setCollapsedHypers] = useState({});
+  // Optuna tuning settings
+  const [useOptuna, setUseOptuna] = useState(true);
+  const [optunaTrials, setOptunaTrials] = useState(25);
 
   // Side drawer panels
   const [isDataOverviewOpen, setIsDataOverviewOpen] = useState(false);
@@ -3428,6 +3431,63 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+              </section>
+
+              {/* HYPERPARAMETER TUNING SECTION (Optuna) */}
+              <section className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+                    <Sliders className="w-5 h-5 text-amber-500" />
+                    <span>Hyperparameter Tuning</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 uppercase tracking-wider">Optuna</span>
+                  </h2>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs mt-1">
+                    Auto-tune model hyperparameters via Bayesian optimisation. Uses cross-validation inside each trial to find the best settings without data leakage.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-5">
+                  {/* Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Auto-tune with Optuna</span>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Automatically search for optimal hyperparameters before final fitting.</p>
+                    </div>
+                    <button
+                      onClick={() => setUseOptuna(!useOptuna)}
+                      className={`relative w-10 h-5.5 rounded-full transition-colors duration-200 flex items-center ${useOptuna ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700'}`}
+                      style={{ minWidth: 40, height: 22 }}
+                    >
+                      <span className={`absolute w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${useOptuna ? 'translate-x-5' : 'translate-x-1'}`} style={{ top: 3 }} />
+                    </button>
+                  </div>
+
+                  {/* Trials Slider */}
+                  {useOptuna && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center text-xs font-semibold">
+                        <span className="text-slate-500">NUMBER OF TRIALS</span>
+                        <span className="font-mono text-amber-600 dark:text-amber-400">{optunaTrials} trials</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="5"
+                        max="100"
+                        step="5"
+                        value={optunaTrials}
+                        onChange={e => setOptunaTrials(parseInt(e.target.value))}
+                        className="w-full accent-amber-500"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>5 (fast)</span>
+                        <span className="text-center">25 (recommended)</span>
+                        <span>100 (thorough)</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        More trials = better hyperparameters, but longer training time. ~25 trials adds ~30–60s for most datasets.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </section>
 

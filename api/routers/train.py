@@ -14,6 +14,7 @@ from api.models.registry import ModelRegistry
 from api.routers.upload import SESSIONS
 from api.utils import (accuracy_band, clean_json, compute_metrics,
                         feature_importance, normalize, preprocess_dataset)
+from api.routers.optuna_utils import run_optuna_study, format_best_params
 
 router = APIRouter()
 
@@ -39,6 +40,9 @@ class TrainRequest(BaseModel):
     periodic_columns: list[Any] = []
     group_by_column:  str = ""
     agg_method:       str = "mean"
+    # Optuna settings (new — backwards-compatible with defaults)
+    use_optuna:       bool = True
+    optuna_trials:    int = 25
 
 
 @router.post("/train")
@@ -69,13 +73,21 @@ async def get_results(session_id: str):
     return clean_json(result)
 
 
-# ── Background training ─────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _update(sid: str, key: str, **kwargs):
     if sid not in PROGRESS:
         PROGRESS[sid] = {}
     PROGRESS[sid].setdefault(key, {}).update(kwargs)
 
+
+def clean_float(v):
+    if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+        return 0.0
+    return v
+
+
+# ── Background training ───────────────────────────────────────────────────────
 
 def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
     try:
@@ -120,31 +132,72 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
         # ── 4. Train each model ──────────────────────────────────────────
         best_r2, best_key = float("-inf"), None
         trained_models = {}
+        n_models = len(req.models)
 
-        for model_key in req.models:
-            _update(sid, model_key, status="training", pct=15)
+        for model_idx, model_key in enumerate(req.models):
             adapter = ModelRegistry.get(model_key)
             if adapter is None:
-                _update(sid, model_key, status="error", pct=100, error=f"Model '{model_key}' not registered.")
+                _update(sid, model_key, status="error", pct=100,
+                        error=f"Model '{model_key}' not registered.")
                 continue
-            try:
-                params = {"n_estimators": req.n_estimators, "learning_rate": req.learning_rate}
-                model  = adapter.make_model(params)
-                model.fit(X_train_n, y_train)
-                _update(sid, model_key, pct=60)
 
-                # Test metrics
+            try:
+                # ── 4a. Optuna tuning phase (pct 10 → 60) ───────────────
+                best_params: dict = {}
+                best_tune_score: float = float("nan")
+
+                if req.use_optuna:
+                    _update(sid, model_key, status="tuning", pct=10,
+                            message=f"Auto-tuning {model_key} with Optuna ({req.optuna_trials} trials)…")
+
+                    n_trials = max(5, req.optuna_trials)
+
+                    def _progress_cb(done, total, mk=model_key):
+                        # Map trial progress from pct 10 → 60
+                        pct = 10 + int((done / total) * 50)
+                        _update(sid, mk, pct=pct,
+                                message=f"Optuna trial {done}/{total}…")
+
+                    try:
+                        best_params, best_tune_score = run_optuna_study(
+                            adapter=adapter,
+                            X_train=X_train_n,
+                            y_train=y_train,
+                            n_trials=n_trials,
+                            task="regression",
+                            cv_folds=min(3, req.cv_folds),
+                            progress_callback=_progress_cb,
+                        )
+                    except Exception as e:
+                        # If tuning fails for any reason, fall back to defaults
+                        best_params = {}
+
+                # ── 4b. Merge tuned params with request-level defaults ───
+                fallback = {
+                    "n_estimators":  req.n_estimators,
+                    "learning_rate": req.learning_rate,
+                }
+                merged_params = {**fallback, **best_params}
+
+                # ── 4c. Fit final model with best params ─────────────────
+                _update(sid, model_key, status="training", pct=62,
+                        message="Fitting final model with best parameters…")
+                model = adapter.make_model(merged_params)
+                model.fit(X_train_n, y_train)
+                _update(sid, model_key, pct=75)
+
+                # ── 4d. Test metrics ─────────────────────────────────────
                 y_pred_test  = model.predict(X_test_n)
                 y_pred_train = model.predict(X_train_n)
                 metrics = compute_metrics(y_test, y_pred_test)
                 train_metrics = compute_metrics(y_train, y_pred_train)
 
-                # Cross-validation
-                _update(sid, model_key, pct=75)
+                # ── 4e. Cross-validation ─────────────────────────────────
+                _update(sid, model_key, pct=82, message="Running cross-validation…")
                 try:
                     kf  = KFold(n_splits=req.cv_folds, shuffle=True, random_state=42)
                     cvs = cross_val_score(
-                        adapter.make_model(params), X_train_n, y_train,
+                        adapter.make_model(merged_params), X_train_n, y_train,
                         cv=kf, scoring="r2",
                     )
                     cv_r2 = float(np.mean(cvs))
@@ -156,12 +209,22 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
                 metrics["train_r2"] = round(float(clean_float(train_metrics["r2"])), 4)
                 metrics["band"]     = accuracy_band(metrics["r2"])
 
+                # ── 4f. Optuna tuning summary ────────────────────────────
+                metrics["optuna_used"]       = req.use_optuna and bool(best_params)
+                metrics["optuna_trials"]     = req.optuna_trials if req.use_optuna else 0
+                metrics["optuna_best_score"] = (
+                    round(best_tune_score, 4)
+                    if not math.isnan(best_tune_score) else None
+                )
+                metrics["best_params"]       = format_best_params(merged_params)
+                metrics["tuned_params"]      = format_best_params(best_params)
+
                 fi_model = adapter.get_feature_importance(model, available) or fi
 
                 trained_models[model_key] = {
-                    "model":           model,
-                    "metrics":         metrics,
-                    "fi":              fi_model,
+                    "model":            model,
+                    "metrics":          metrics,
+                    "fi":               fi_model,
                     "test_predictions": [round(float(v), 4) for v in y_pred_test[:200]],
                     "test_actuals":     [round(float(v), 4) for v in y_test[:200]],
                 }
@@ -169,7 +232,9 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
                 if metrics["r2"] > best_r2:
                     best_r2, best_key = metrics["r2"], model_key
 
-                _update(sid, model_key, status="done", pct=100, metrics=metrics)
+                _update(sid, model_key, status="done", pct=100, metrics=metrics,
+                        message="Training complete.")
+
             except Exception as e:
                 _update(sid, model_key, status="error", pct=100, error=str(e))
 

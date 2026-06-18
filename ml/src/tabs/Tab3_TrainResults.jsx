@@ -8,7 +8,9 @@ const API = 'http://localhost:7860';
 const FRIENDLY_MESSAGES = [
   'Preparing your dataset…',
   'Building feature pipelines…',
-  'Training is underway — sit tight!',
+  'Auto-tuning hyperparameters with Optuna…',
+  'Running Bayesian optimisation trials…',
+  'Fitting final model with best parameters…',
   'Running cross-validation…',
   'Evaluating on held-out test data…',
   'Calculating feature importance…',
@@ -46,6 +48,14 @@ function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] })
     return found ? found.name : key;
   };
 
+  const getPhaseLabel = (status, pct) => {
+    if (status === 'tuning') return '🔬 Auto-tuning…';
+    if (status === 'training') return pct >= 80 ? '📊 Cross-validating…' : '⚙️ Fitting model…';
+    if (status === 'done') return '✅ Done';
+    if (status === 'error') return '❌ Error';
+    return '⏳ Queued';
+  };
+
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', padding: '48px 0', animation: 'fadeIn 0.3s ease' }}>
       {/* Overall progress */}
@@ -74,16 +84,23 @@ function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] })
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {models.map(m => {
           const p = progress[m] ?? { pct: 0, status: 'queued' };
-          const color = p.status === 'done' ? '#10b981' : p.status === 'error' ? '#f43f5e' : 'var(--accent)';
-          const statusIcon = p.status === 'done' ? 'check-circle' : p.status === 'error' ? 'alert-circle' : 'loader';
+          const isTuning = p.status === 'tuning';
+          const color = p.status === 'done' ? '#10b981' : p.status === 'error' ? '#f43f5e' : isTuning ? '#f59e0b' : 'var(--accent)';
+          const statusIcon = p.status === 'done' ? 'check-circle' : p.status === 'error' ? 'alert-circle' : isTuning ? 'wand' : 'loader';
           return (
             <div key={m} style={{
               background: 'var(--bg-raised)', borderRadius: 12, padding: '14px 18px',
-              border: `1px solid ${p.status === 'done' ? 'rgba(16,185,129,0.25)' : p.status === 'error' ? 'rgba(244,63,94,0.25)' : 'var(--border)'}`,
+              border: `1px solid ${p.status === 'done' ? 'rgba(16,185,129,0.25)' : p.status === 'error' ? 'rgba(244,63,94,0.25)' : isTuning ? 'rgba(245,158,11,0.3)' : 'var(--border)'}`,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{getModelName(m)}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {isTuning && (
+                    <span style={{
+                      fontSize: 10, padding: '2px 7px', borderRadius: 99, fontWeight: 600,
+                      background: 'rgba(245,158,11,0.12)', color: '#f59e0b',
+                    }}>Optuna tuning</span>
+                  )}
                   {p.status === 'done' && p.metrics?.band && (
                     <span style={{
                       fontSize: 10, padding: '2px 7px', borderRadius: 99, fontWeight: 600,
@@ -91,16 +108,28 @@ function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] })
                       color: BAND_INTERP[p.metrics.band]?.color,
                     }}>{p.metrics.band}</span>
                   )}
-                  <i className={`ti ti-${statusIcon} ${p.status === 'training' ? 'animate-spin' : ''}`}
+                  <i className={`ti ti-${statusIcon} ${(p.status === 'training' || isTuning) ? 'animate-spin' : ''}`}
                     style={{ fontSize: 15, color }} />
                 </div>
               </div>
-              <ProgressBar pct={p.pct ?? 0} color={color} animated={p.status === 'training'} />
+              {/* Phase label */}
+              {p.status !== 'queued' && (
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 500 }}>
+                  {p.message || getPhaseLabel(p.status, p.pct)}
+                </div>
+              )}
+              <ProgressBar pct={p.pct ?? 0} color={color} animated={p.status === 'training' || isTuning} />
               {p.status === 'done' && p.metrics && (
                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary)', display: 'flex', gap: 14 }}>
                   <span>R² <strong style={{ color: 'var(--text-primary)' }}>{p.metrics.r2?.toFixed(3)}</strong></span>
                   <span>RMSE <strong style={{ color: 'var(--text-primary)' }}>{p.metrics.rmse?.toFixed(3)}</strong></span>
                   <span>MAE <strong style={{ color: 'var(--text-primary)' }}>{p.metrics.mae?.toFixed(3)}</strong></span>
+                  {p.metrics.optuna_used && (
+                    <span style={{ marginLeft: 'auto', color: '#f59e0b', fontWeight: 600 }}>
+                      <i className="ti ti-sparkles" style={{ fontSize: 10, marginRight: 3 }} />
+                      Optuna tuned
+                    </span>
+                  )}
                 </div>
               )}
               {p.status === 'error' && (
@@ -120,6 +149,7 @@ function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] })
 // ── Results Dashboard ───────────────────────────────────────────────────────────
 function ResultsDashboard({ results, featureImportance, forecast, sessionId, config, onTryAnother, onSaveRun, confirmedModels = [] }) {
   const chartRef  = useRef();
+  const [expandedParams, setExpandedParams] = useState({});
   const fiRef     = useRef();
   const residRef  = useRef();
   const [activeModel, setActiveModel] = useState(null);
@@ -350,6 +380,57 @@ function ResultsDashboard({ results, featureImportance, forecast, sessionId, con
         )}
       </div>
 
+      {/* ── Optuna Best Parameters Card ─────────────────────────────── */}
+      {r.optuna_used && r.tuned_params && Object.keys(r.tuned_params).length > 0 && (() => {
+        const isExpanded = expandedParams[modelKey];
+        return (
+          <div style={{
+            borderRadius: 12, border: '1px solid rgba(245,158,11,0.3)',
+            background: 'rgba(245,158,11,0.05)', overflow: 'hidden',
+          }}>
+            <button
+              onClick={() => setExpandedParams(p => ({ ...p, [modelKey]: !p[modelKey] }))}
+              style={{
+                width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center',
+                justifyContent: 'space-between', background: 'none', border: 'none',
+                cursor: 'pointer', color: 'var(--text-primary)',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="ti ti-sparkles" style={{ fontSize: 16, color: '#f59e0b' }} />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Best Parameters Found by Optuna</span>
+                {r.optuna_best_score != null && (
+                  <span style={{
+                    fontSize: 10, padding: '2px 7px', borderRadius: 99, fontWeight: 600,
+                    background: 'rgba(245,158,11,0.15)', color: '#f59e0b',
+                  }}>CV R² {r.optuna_best_score.toFixed(3)}</span>
+                )}
+                <span style={{
+                  fontSize: 10, padding: '2px 7px', borderRadius: 99,
+                  background: 'rgba(245,158,11,0.10)', color: '#b45309', fontWeight: 500,
+                }}>{r.optuna_trials} trials</span>
+              </div>
+              <i className={`ti ti-chevron-${isExpanded ? 'up' : 'down'}`} style={{ fontSize: 14, color: 'var(--text-muted)' }} />
+            </button>
+            {isExpanded && (
+              <div style={{ padding: '4px 16px 16px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {Object.entries(r.tuned_params).map(([k, v]) => (
+                  <div key={k} style={{
+                    padding: '6px 12px', borderRadius: 8,
+                    background: 'var(--bg-raised)', border: '1px solid var(--border)',
+                    fontSize: 12,
+                  }}>
+                    <span style={{ color: 'var(--text-muted)', marginRight: 6 }}>{k}</span>
+                    <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                      {typeof v === 'number' ? (v % 1 !== 0 ? v.toFixed(5) : v) : String(v)}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Charts */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px,1fr))', gap: 20 }}>
         {r.test_predictions && (
@@ -550,12 +631,14 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
               { label: `${Math.round((1 - config.split) * 100)}/${Math.round(config.split * 100)} split`, icon: 'divide' },
               { label: `${config.cv_folds}-fold CV`, icon: 'rotate' },
               { label: config.normalization === 'none' ? 'No scaling' : config.normalization, icon: 'arrows-maximize' },
+              ...(config.use_optuna !== false ? [{ label: `Optuna · ${config.optuna_trials ?? 25} trials`, icon: 'sparkles', color: '#f59e0b' }] : []),
             ].map((pill, i) => (
               <span key={i} style={{
                 display: 'flex', alignItems: 'center', gap: 5,
                 padding: '5px 12px', borderRadius: 99, fontSize: 12,
-                background: 'var(--bg-overlay)', border: '1px solid var(--border-strong)',
-                color: 'var(--text-secondary)',
+                background: pill.color ? 'rgba(245,158,11,0.10)' : 'var(--bg-overlay)',
+                border: `1px solid ${pill.color ? 'rgba(245,158,11,0.3)' : 'var(--border-strong)'}`,
+                color: pill.color || 'var(--text-secondary)',
               }}>
                 <i className={`ti ti-${pill.icon}`} style={{ fontSize: 12 }} />
                 {pill.label}

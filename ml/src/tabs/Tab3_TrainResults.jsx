@@ -147,9 +147,10 @@ function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] })
 }
 
 // ── Results Dashboard ───────────────────────────────────────────────────────────
-function ResultsDashboard({ results, featureImportance, forecast, sessionId, config, onTryAnother, onSaveRun, confirmedModels = [] }) {
+function ResultsDashboard({ results, featureImportance, forecast, pipelineReport, sessionId, config, onTryAnother, onSaveRun, confirmedModels = [] }) {
   const chartRef  = useRef();
   const [expandedParams, setExpandedParams] = useState({});
+  const [expandedPipeline, setExpandedPipeline] = useState(true);
   const fiRef     = useRef();
   const residRef  = useRef();
   const [activeModel, setActiveModel] = useState(null);
@@ -380,6 +381,166 @@ function ResultsDashboard({ results, featureImportance, forecast, sessionId, con
         )}
       </div>
 
+      {/* ── Feature Selection Pipeline Report ─────────────────────────── */}
+      {pipelineReport && (
+        <div style={{
+          borderRadius: 14, border: '1px solid rgba(99,102,241,0.25)',
+          background: 'linear-gradient(135deg, rgba(99,102,241,0.04) 0%, rgba(139,92,246,0.04) 100%)',
+          overflow: 'hidden', boxShadow: '0 4px 20px rgba(99,102,241,0.05)',
+          animation: 'fadeIn 0.4s ease', marginBottom: 16
+        }}>
+          <button
+            onClick={() => setExpandedPipeline(!expandedPipeline)}
+            style={{
+              width: '100%', padding: '14px 18px', display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', background: 'none', border: 'none',
+              cursor: 'pointer', color: 'var(--text-primary)', transition: 'background 0.2s'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <i className="ti ti-layers" style={{ fontSize: 18, color: 'var(--accent)' }} />
+              <div style={{ textAlign: 'left' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, display: 'block' }}>Feature Selection & Preprocessing Report</span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Automated pipeline funnel and SHAP relative importances</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{
+                fontSize: 10, padding: '2.5px 8px', borderRadius: 99, fontWeight: 600,
+                background: 'rgba(99,102,241,0.12)', color: 'var(--accent)',
+              }}>
+                {pipelineReport.selected_features?.length || 0} features selected
+              </span>
+              <i className={`ti ti-chevron-${expandedPipeline ? 'up' : 'down'}`} style={{ fontSize: 14, color: 'var(--text-muted)' }} />
+            </div>
+          </button>
+
+          {expandedPipeline && (
+            <div style={{
+              padding: '18px', borderTop: '1px solid var(--border)',
+              display: 'flex', flexDirection: 'column', gap: 24, background: 'rgba(255,255,255,0.01)'
+            }}>
+              {/* Funnel progression row */}
+              <div>
+                <h5 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 12 }}>
+                  Pipeline Funnel Progression
+                </h5>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+                  gap: 12, alignItems: 'center'
+                }}>
+                  {[
+                    { label: 'Original', val: pipelineReport.stage0_original, color: 'var(--text-secondary)' },
+                    { label: 'Generated', val: (pipelineReport.stage0_original || 0) + (pipelineReport.stage1_generated || 0), color: 'var(--accent)' },
+                    { label: 'Variance Filter', val: pipelineReport.stage2_after_variance, color: '#f59e0b' },
+                    { label: 'Correlation Filter', val: pipelineReport.stage3_after_correlation, color: '#f43f5e' },
+                    { label: 'Mutual Info Final', val: pipelineReport.stage4_after_mi, color: '#10b981', active: true }
+                  ].map((step, idx, arr) => (
+                    <div key={idx} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                      <div style={{
+                        flex: 1, padding: '10px', borderRadius: 10, textAlign: 'center',
+                        background: step.active ? 'rgba(16,185,129,0.08)' : 'var(--bg-raised)',
+                        border: `1.5px solid ${step.active ? '#10b981' : 'var(--border)'}`,
+                        boxShadow: step.active ? '0 2px 10px rgba(16,185,129,0.05)' : 'none'
+                      }}>
+                        <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>{step.label}</span>
+                        <strong style={{ fontSize: 14, color: step.active ? '#10b981' : 'var(--text-primary)', display: 'block', marginTop: 4 }}>
+                          {step.val != null ? step.val : '—'}
+                        </strong>
+                      </div>
+                      {idx < arr.length - 1 && (
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: 'var(--border-strong)', padding: '0 4px', fontSize: 12
+                        }}>
+                          <i className="ti ti-chevron-right" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Middle Row: First pass LGBM model evaluation & SHAP Importance */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+                {/* Stage 5: First pass LightGBM performance */}
+                <div style={{
+                  background: 'var(--bg-raised)', border: '1px solid var(--border)',
+                  borderRadius: 12, padding: '16px'
+                }}>
+                  <h5 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <i className="ti ti-flame" style={{ color: '#f59e0b' }} />
+                    First-Pass Evaluator ({pipelineReport.first_pass_model || 'LightGBM'})
+                  </h5>
+                  <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 14 }}>
+                    A quick-fit GBDT model was run on the selected features to validate the subsets and compute SHAP interaction coefficients.
+                  </p>
+                  <div style={{ display: 'flex', gap: 14 }}>
+                    <div>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block' }}>R² SCORE</span>
+                      <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>
+                        {pipelineReport.first_pass_metrics?.r2 != null ? pipelineReport.first_pass_metrics.r2.toFixed(3) : '—'}
+                      </strong>
+                    </div>
+                    <div style={{ width: 1.5, background: 'var(--border)', alignSelf: 'stretch' }} />
+                    <div>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block' }}>RMSE</span>
+                      <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>
+                        {pipelineReport.first_pass_metrics?.rmse != null ? pipelineReport.first_pass_metrics.rmse.toFixed(2) : '—'}
+                      </strong>
+                    </div>
+                    <div style={{ width: 1.5, background: 'var(--border)', alignSelf: 'stretch' }} />
+                    <div>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block' }}>MAE</span>
+                      <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>
+                        {pipelineReport.first_pass_metrics?.mae != null ? pipelineReport.first_pass_metrics.mae.toFixed(2) : '—'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stage 6: SHAP importances list */}
+                <div style={{
+                  background: 'var(--bg-raised)', border: '1px solid var(--border)',
+                  borderRadius: 12, padding: '16px', display: 'flex', flexDirection: 'column'
+                }}>
+                  <h5 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <i className="ti ti-chart-bar" style={{ color: 'var(--accent)' }} />
+                    SHAP Relative Feature Importances
+                  </h5>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
+                    {pipelineReport.shap_rankings && pipelineReport.shap_rankings.length > 0 ? (
+                      (() => {
+                        const maxVal = Math.max(...pipelineReport.shap_rankings.map(s => s.importance), 0.0001);
+                        return pipelineReport.shap_rankings.map((item, idx) => {
+                          const pct = (item.importance / maxVal) * 100;
+                          return (
+                            <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10.5 }}>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{item.feature}</span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: 9.5 }}>{item.importance.toFixed(4)}</span>
+                              </div>
+                              <div style={{ width: '100%', height: 5, borderRadius: 3, background: 'var(--border)', overflow: 'hidden' }}>
+                                <div style={{
+                                  width: `${pct}%`, height: '100%', borderRadius: 3,
+                                  background: 'linear-gradient(90deg, var(--accent) 0%, #a78bfa 100%)'
+                                }} />
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
+                    ) : (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No features processed.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Optuna Best Parameters Card ─────────────────────────────── */}
       {r.optuna_used && r.tuned_params && Object.keys(r.tuned_params).length > 0 && (() => {
         const isExpanded = expandedParams[modelKey];
@@ -502,6 +663,7 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
   const [results,   setResults]   = useState(null);
   const [featureImportance, setFI] = useState([]);
   const [forecast,  setForecast]  = useState([]);
+  const [pipelineReport, setPipelineReport] = useState(null);
   const [msgIdx,    setMsgIdx]    = useState(0);
   const [error,     setError]     = useState(null);
   const [history,   setHistory]   = useState([]);
@@ -550,6 +712,7 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
             setResults(rd.results);
             setFI(rd.feature_importance ?? []);
             setForecast(rd.forecast ?? []);
+            setPipelineReport(rd.feature_pipeline_report ?? null);
             setTimeout(() => setPhase('results'), 600);
           }
         } catch (_) {}
@@ -697,6 +860,7 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
         results={results ?? {}}
         featureImportance={featureImportance}
         forecast={forecast}
+        pipelineReport={pipelineReport}
         sessionId={sessionId}
         config={config}
         onTryAnother={onTryAnother}

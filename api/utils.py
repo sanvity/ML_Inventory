@@ -214,7 +214,14 @@ def preprocess_single_record(
     final_features = cfg.get("final_features", [])
     for f in final_features:
         if f not in df_input.columns:
-            df_input[f] = 0.0
+            if "_x_" in f:
+                parts = f.split("_x_")
+                if len(parts) == 2 and parts[0] in df_input.columns and parts[1] in df_input.columns:
+                    df_input[f] = df_input[parts[0]].astype(float) * df_input[parts[1]].astype(float)
+                else:
+                    df_input[f] = 0.0
+            else:
+                df_input[f] = 0.0
     return df_input[final_features].values
 
 

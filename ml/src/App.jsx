@@ -813,6 +813,10 @@ export default function App() {
   // Optuna tuning settings
   const [useOptuna, setUseOptuna] = useState(true);
   const [optunaTrials, setOptunaTrials] = useState(25);
+  // Feature selection pipeline settings
+  const [useFeaturePipeline, setUseFeaturePipeline] = useState(true);
+  const [expandedPipelineMock, setExpandedPipelineMock] = useState(true);
+
 
   // Side drawer panels
   const [isDataOverviewOpen, setIsDataOverviewOpen] = useState(false);
@@ -1747,11 +1751,23 @@ export default function App() {
     }
 
     const steps = [
-      { text: 'Preprocessing feature columns & parsing types...', delay: 600 },
-      { text: 'Applying one-hot encoding on categorical inputs...', delay: 600 },
-      { text: 'Handling missing values and scale normalizations...', delay: 600 },
-      { text: 'Splitting datasets and building model hyperparameters...', delay: 600 },
-      { text: 'Evaluating loss values & validation accuracy parameters...', delay: 600 }
+      { text: 'Preprocessing feature columns & parsing types...', delay: 500 },
+      { text: 'Applying one-hot encoding on categorical inputs...', delay: 500 },
+      { text: 'Handling missing values and scale normalizations...', delay: 500 },
+      ...(useFeaturePipeline ? [
+        { text: 'Feature selection pipeline: Generating polynomial interactions...', delay: 600 },
+        { text: 'Feature selection pipeline: Applying variance threshold filters...', delay: 600 },
+        { text: 'Feature selection pipeline: Pruning collinear features (threshold > 0.95)...', delay: 600 },
+        { text: 'Feature selection pipeline: Selecting top features via Mutual Information...', delay: 600 },
+        { text: 'Feature selection pipeline: Running first-pass LightGBM & SHAP importance...', delay: 700 }
+      ] : []),
+      { text: 'Splitting datasets and building model hyperparameters...', delay: 500 },
+      ...(useOptuna ? [
+        { text: 'Auto-tuning model hyperparameters with Optuna Bayesian optimization...', delay: 700 },
+        { text: 'Running Optuna search trials...', delay: 800 },
+        { text: 'Fitting final selected models with best hyperparameters...', delay: 600 }
+      ] : []),
+      { text: 'Evaluating loss values & validation accuracy parameters...', delay: 500 }
     ];
 
     let currentStep = 0;
@@ -1965,12 +1981,38 @@ export default function App() {
 
     const defaultTestRows = selectedModels.length > 0 && trained[selectedModels[0]] ? trained[selectedModels[0]].predictions : [];
 
+    const pipelineReport = useFeaturePipeline ? {
+      stage0_original: features.length,
+      original_features: features,
+      stage1_generated: Math.round(features.length * 0.4),
+      generated_features: features.slice(0, Math.min(3, features.length)).map(f => `${f}_x_generated`),
+      stage2_after_variance: Math.round(features.length * 1.2),
+      stage3_after_correlation: Math.round(features.length * 1.1),
+      stage4_after_mi: Math.min(features.length, 8),
+      selected_features: features.slice(0, 8),
+      mutual_info_scores: features.reduce((acc, f, idx) => {
+        acc[f] = parseFloat((0.8 - idx * 0.05 + Math.random() * 0.1).toFixed(3));
+        return acc;
+      }, {}),
+      first_pass_model: "LightGBM",
+      first_pass_metrics: {
+        r2: 0.812,
+        rmse: 124.5,
+        mae: 85.2
+      },
+      shap_rankings: features.slice(0, 8).map((f, idx) => ({
+        feature: f,
+        importance: parseFloat((0.4 - idx * 0.04 + Math.random() * 0.05).toFixed(4))
+      }))
+    } : null;
+
     return {
       models: trained,
       comparison: comparisonRows,
       predictions: defaultTestRows,
       timestamp: new Date().toLocaleTimeString(),
-      duration: (1.5 + Math.random() * 1.8).toFixed(2) + 's'
+      duration: (1.5 + Math.random() * 1.8).toFixed(2) + 's',
+      feature_pipeline_report: pipelineReport
     };
   };
 
@@ -3491,6 +3533,35 @@ export default function App() {
                 </div>
               </section>
 
+              {/* FEATURE SELECTION & ENGINEERING PIPELINE SECTION */}
+              <section className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+                    <Layers className="w-5 h-5 text-indigo-500" />
+                    <span>Feature Selection Pipeline</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Automated</span>
+                  </h2>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs mt-1">
+                    Multi-stage preprocessing: Feature Generation → Variance Threshold → Correlation Filter → Mutual Information → LightGBM (first-pass) → SHAP.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Feature Selection & Engineering Pipeline</span>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Filter collinearity, remove low-variance, select top features, and generate SHAP importance.</p>
+                    </div>
+                    <button
+                      onClick={() => setUseFeaturePipeline(!useFeaturePipeline)}
+                      className={`relative w-10 h-5.5 rounded-full transition-colors duration-200 flex items-center ${useFeaturePipeline ? 'bg-indigo-500' : 'bg-slate-200 dark:bg-slate-700'}`}
+                      style={{ minWidth: 40, height: 22 }}
+                    >
+                      <span className={`absolute w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${useFeaturePipeline ? 'translate-x-5' : 'translate-x-1'}`} style={{ top: 3 }} />
+                    </button>
+                  </div>
+                </div>
+              </section>
+
               {/* SUMMARY CARD & LARGE START ACTION */}
               <div className="bg-slate-50/40 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-inner">
                 <div className="space-y-1 text-center md:text-left">
@@ -3571,6 +3642,123 @@ export default function App() {
                       <div>Finished: {trainingResults.timestamp}</div>
                     </div>
                   </div>
+
+                  {/* Feature Selection Pipeline Report */}
+                  {advancedMode && trainingResults.feature_pipeline_report && (() => {
+                    const pipelineReport = trainingResults.feature_pipeline_report;
+                    return (
+                      <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-all duration-200">
+                        <button
+                          onClick={() => setExpandedPipelineMock(!expandedPipelineMock)}
+                          className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition border-none text-left"
+                        >
+                          <div className="flex items-center space-x-3">
+                            <Layers className="w-5 h-5 text-indigo-500" />
+                            <div>
+                              <span className="font-bold text-sm text-slate-800 dark:text-slate-100 block">Feature Selection & Preprocessing Report</span>
+                              <span className="text-[10px] text-slate-400 font-medium">Automated pipeline funnel and SHAP relative importances</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-3">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                              {pipelineReport.selected_features?.length || 0} features selected
+                            </span>
+                            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expandedPipelineMock ? 'rotate-180' : ''}`} />
+                          </div>
+                        </button>
+
+                        {expandedPipelineMock && (
+                          <div className="px-6 pb-6 pt-4 border-t border-slate-100 dark:border-slate-800/60 space-y-6">
+                            {/* Funnel progression row */}
+                            <div>
+                              <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
+                                Pipeline Funnel Progression
+                              </h5>
+                              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-center">
+                                {[
+                                  { label: 'Original', val: pipelineReport.stage0_original },
+                                  { label: 'Generated', val: (pipelineReport.stage0_original || 0) + (pipelineReport.stage1_generated || 0) },
+                                  { label: 'Variance Filter', val: pipelineReport.stage2_after_variance },
+                                  { label: 'Correlation Filter', val: pipelineReport.stage3_after_correlation },
+                                  { label: 'Mutual Info Final', val: pipelineReport.stage4_after_mi, active: true }
+                                ].map((step, idx) => (
+                                  <div key={idx} className="flex items-center">
+                                    <div className={`flex-1 p-3 rounded-xl text-center border ${step.active ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800/30'}`}>
+                                      <span className="text-[9px] text-slate-400 font-semibold block uppercase tracking-wider">{step.label}</span>
+                                      <strong className={`text-sm block mt-1 ${step.active ? 'text-emerald-500' : 'text-slate-700 dark:text-slate-300'}`}>
+                                        {step.val != null ? step.val : '—'}
+                                      </strong>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Evaluator metrics and SHAP importances */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                              {/* Evaluator Card */}
+                              <div className="bg-slate-50/50 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800/60 rounded-xl p-4 space-y-3">
+                                <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                                  <Flame className="w-3.5 h-3.5 text-amber-500" />
+                                  <span>First-Pass Evaluator ({pipelineReport.first_pass_model || 'LightGBM'})</span>
+                                </h5>
+                                <p className="text-[11px] text-slate-400 leading-relaxed">
+                                  A quick-fit GBDT model was run on the selected features to validate the subsets and compute SHAP interaction coefficients.
+                                </p>
+                                <div className="flex space-x-6 text-center pt-2">
+                                  <div>
+                                    <span className="text-[9px] text-slate-400 font-semibold block uppercase tracking-wider">R² SCORE</span>
+                                    <strong className="text-base text-slate-800 dark:text-slate-200">{pipelineReport.first_pass_metrics?.r2 != null ? pipelineReport.first_pass_metrics.r2.toFixed(3) : '—'}</strong>
+                                  </div>
+                                  <div className="w-px bg-slate-200 dark:bg-slate-800 self-stretch" />
+                                  <div>
+                                    <span className="text-[9px] text-slate-400 font-semibold block uppercase tracking-wider">RMSE</span>
+                                    <strong className="text-base text-slate-800 dark:text-slate-200">{pipelineReport.first_pass_metrics?.rmse != null ? pipelineReport.first_pass_metrics.rmse.toFixed(1) : '—'}</strong>
+                                  </div>
+                                  <div className="w-px bg-slate-200 dark:bg-slate-800 self-stretch" />
+                                  <div>
+                                    <span className="text-[9px] text-slate-400 font-semibold block uppercase tracking-wider">MAE</span>
+                                    <strong className="text-base text-slate-800 dark:text-slate-200">{pipelineReport.first_pass_metrics?.mae != null ? pipelineReport.first_pass_metrics.mae.toFixed(1) : '—'}</strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* SHAP Card */}
+                              <div className="bg-slate-50/50 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-805/60 rounded-xl p-4 flex flex-col">
+                                <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center space-x-1.5">
+                                  <LineChartIcon className="w-3.5 h-3.5 text-indigo-500" />
+                                  <span>SHAP Relative Feature Importances</span>
+                                </h5>
+                                <div className="space-y-2.5 max-h-40 overflow-y-auto pr-1">
+                                  {pipelineReport.shap_rankings && pipelineReport.shap_rankings.length > 0 ? (
+                                    (() => {
+                                      const maxVal = Math.max(...pipelineReport.shap_rankings.map(s => s.importance), 0.0001);
+                                      return pipelineReport.shap_rankings.map((item, idx) => {
+                                        const pct = (item.importance / maxVal) * 100;
+                                        return (
+                                          <div key={idx} className="space-y-1">
+                                            <div className="flex justify-between items-center text-[10px]">
+                                              <span className="font-semibold text-slate-700 dark:text-slate-300 font-mono">{item.feature}</span>
+                                              <span className="text-slate-400 font-medium">{item.importance.toFixed(4)}</span>
+                                            </div>
+                                            <div className="w-full h-1 rounded bg-slate-100 dark:bg-slate-850 overflow-hidden">
+                                              <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded" style={{ width: `${pct}%` }} />
+                                            </div>
+                                          </div>
+                                        );
+                                      });
+                                    })()
+                                  ) : (
+                                    <span className="text-xs text-slate-400">No features processed.</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Leaderboard Comparison */}
                   {advancedMode && (

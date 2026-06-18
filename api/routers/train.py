@@ -43,6 +43,9 @@ class TrainRequest(BaseModel):
     # Optuna settings (new — backwards-compatible with defaults)
     use_optuna:       bool = True
     optuna_trials:    int = 25
+    # Feature selection pipeline settings
+    use_feature_pipeline: bool = True
+
 
 
 @router.post("/train")
@@ -106,14 +109,54 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
         # Handle missing
         df_proc = df_proc.fillna(df_proc.mean(numeric_only=True))
 
-        X = df_proc[available].values.astype(float)
-        y = pd.to_numeric(df_proc[req.target], errors="coerce").fillna(0).values
-
         # ── 2. Train/test split ──────────────────────────────────────────
         shuffle = (req.split_method != "chronological")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=req.split, shuffle=shuffle, random_state=42
+        df_train, df_test = train_test_split(
+            df_proc, test_size=req.split, shuffle=shuffle, random_state=42
         )
+
+        pipeline_report = None
+        if req.use_feature_pipeline:
+            from api.routers.feature_pipeline import run_feature_pipeline
+            from api.utils import detect_column_type
+            
+            # Identify original numeric columns
+            original_numeric_cols = [c for c in df.columns if detect_column_type(df, c) == "numeric"]
+            
+            # Update status
+            for m in req.models:
+                _update(sid, m, status="tuning", pct=5, message="Running feature selection pipeline…")
+            
+            df_train_sel, df_test_sel, selected_features, pipeline_report = run_feature_pipeline(
+                df_train=df_train,
+                df_test=df_test,
+                available_features=available,
+                target_col=req.target,
+                original_numeric_cols=original_numeric_cols
+            )
+            available = selected_features
+            
+            # Combine to rebuild full X and y for later prediction/saving
+            df_all_pipeline = pd.concat([df_train_sel, df_test_sel]).loc[df_proc.index]
+            X = df_all_pipeline[available].values.astype(float)
+            y = pd.to_numeric(df_all_pipeline[req.target], errors="coerce").fillna(0).values
+            
+            X_train = df_train_sel[available].values.astype(float)
+            X_test = df_test_sel[available].values.astype(float)
+            y_train = pd.to_numeric(df_train_sel[req.target], errors="coerce").fillna(0).values
+            y_test = pd.to_numeric(df_test_sel[req.target], errors="coerce").fillna(0).values
+            
+            fi = feature_importance(df_all_pipeline, available, req.target)
+        else:
+            X = df_proc[available].values.astype(float)
+            y = pd.to_numeric(df_proc[req.target], errors="coerce").fillna(0).values
+            
+            X_train = df_train[available].values.astype(float)
+            X_test = df_test[available].values.astype(float)
+            y_train = pd.to_numeric(df_train[req.target], errors="coerce").fillna(0).values
+            y_test = pd.to_numeric(df_test[req.target], errors="coerce").fillna(0).values
+            
+            fi = feature_importance(df_proc, available, req.target)
 
         # ── 3. Normalise ────────────────────────────────────────────────
         X_train_n, X_test_n, scaler = normalize(X_train.copy(), X_test.copy(), req.normalization)
@@ -127,7 +170,7 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
         cfg["final_features"] = available
         SESSIONS[sid]["cfg"] = cfg
 
-        fi = feature_importance(df_proc, available, req.target)
+
 
         # ── 4. Train each model ──────────────────────────────────────────
         best_r2, best_key = float("-inf"), None
@@ -259,6 +302,7 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
         RESULTS[sid] = {
             "results":            results_payload,
             "feature_importance": fi,
+            "feature_pipeline_report": pipeline_report,
         }
 
     except Exception as e:

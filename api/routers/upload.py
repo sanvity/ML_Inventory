@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from api.utils import detect_column_type, detect_target, feature_importance
+from api.utils import detect_column_type, detect_target_model, feature_importance
 
 router = APIRouter()
 
@@ -52,7 +52,7 @@ async def upload_file(file: UploadFile = File(...)):
         if col_type == "numeric":
             numeric_cols.append(col)
 
-    suggested_target = detect_target(numeric_cols)
+    suggested_target = detect_target_model(df)
 
     # Full correlation matrix for all numeric columns
     corr_dict: dict = {}

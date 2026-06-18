@@ -20,6 +20,8 @@ TARGET_KEYWORDS = [
     "score", "rating", "rate", "return", "yield", "amount", "total",
     "expense", "budget", "forecast", "prediction", "close", "closing",
     "temperature", "pressure", "failure", "defect", "quality", "ebitda",
+    "churn", "default", "class", "status", "outcome", "clicked", "converted",
+    "purchased", "y"
 ]
 
 ID_KEYWORDS = ["id", "uuid", "index", "row_num", "rownum", "serial", "seq", "key", "unnamed"]
@@ -53,6 +55,95 @@ def detect_target(columns: list[str]) -> str | None:
             if kw in cl:
                 return col
     return columns[-1] if columns else None
+
+
+def detect_target_model(df: pd.DataFrame) -> str | None:
+    """
+    Model-based recommendation of the target column using semantic and statistical meta-features.
+    """
+    if df.empty:
+        return None
+    columns = list(df.columns)
+    if not columns:
+        return None
+        
+    n_rows = len(df)
+    n_cols = len(columns)
+    
+    # Identify numeric columns for correlation analysis
+    numeric_cols = [c for c in columns if pd.api.types.is_numeric_dtype(df[c])]
+    corr_matrix = None
+    if len(numeric_cols) > 1 and n_rows > 2:
+        try:
+            numeric_df = df[numeric_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+            corr_matrix = numeric_df.corr().abs()
+        except Exception:
+            pass
+            
+    best_col = None
+    best_score = float("-inf")
+    
+    for idx, col in enumerate(columns):
+        col_lower = str(col).lower()
+        
+        # 1. Semantic Match score
+        keyword_match = 0.0
+        # Positive keywords
+        for kw in TARGET_KEYWORDS:
+            if kw in col_lower:
+                keyword_match += 4.0
+                break
+                
+        # Negative keywords (IDs, indices, keys are never targets)
+        is_id = False
+        for kw in ID_KEYWORDS:
+            if kw in col_lower:
+                is_id = True
+                keyword_match -= 6.0
+                break
+                
+        # 2. Position score (closer to the end is more likely)
+        relative_idx = idx / n_cols if n_cols > 1 else 0.5
+        
+        # 3. Cardinality ratio (unique values ratio)
+        unique_count = df[col].nunique()
+        unique_ratio = unique_count / n_rows if n_rows > 0 else 0.0
+        
+        # High cardinality in categorical or numeric is likely a unique ID/text column, not target
+        unique_ratio_penalty = 0.0
+        if unique_ratio > 0.95 and (is_id or not pd.api.types.is_numeric_dtype(df[col])):
+            unique_ratio_penalty = 1.0
+            
+        # 4. Null percentage penalty
+        null_pct = df[col].isna().mean()
+        
+        # 5. Correlation score (targets correlate with features)
+        mean_corr = 0.0
+        if corr_matrix is not None and col in corr_matrix.columns:
+            # average correlation with other columns
+            all_corrs = corr_matrix[col].dropna()
+            if len(all_corrs) > 1:
+                mean_corr = float(all_corrs.mean())
+                
+        # 6. Type feature (continuous/categorical are fine, datetime is rarely target except forecast)
+        is_datetime = 1.0 if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col_lower or "time" in col_lower else 0.0
+        
+        # Pre-calibrated decision logit score formula:
+        score = (
+            5.0 * keyword_match +
+            2.5 * mean_corr +
+            2.0 * relative_idx -
+            8.0 * unique_ratio_penalty -
+            6.0 * null_pct -
+            4.0 * is_datetime
+        )
+        
+        if score > best_score:
+            best_score = score
+            best_col = col
+            
+    return best_col if best_col else columns[-1]
+
 
 
 def detect_column_type(df: pd.DataFrame, col: str) -> str:

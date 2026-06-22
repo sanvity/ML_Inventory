@@ -685,6 +685,83 @@ const isBestMetric = (metricName, metricValue, allRows) => {
   }
 };
 
+const TARGET_KEYWORDS = [
+  "price", "cost", "value", "target", "label", "output", "result",
+  "revenue", "sales", "profit", "loss", "income", "salary", "wage",
+  "score", "rating", "rate", "return", "yield", "amount", "total",
+  "expense", "budget", "forecast", "prediction", "close", "closing",
+  "temperature", "pressure", "failure", "defect", "quality", "ebitda",
+  "churn", "default", "class", "status", "outcome", "clicked", "converted",
+  "purchased", "y"
+];
+
+const ID_KEYWORDS = ["id", "uuid", "index", "row_num", "rownum", "serial", "seq", "key", "unnamed"];
+
+const detectTargetModelJS = (columnsInfo, totalRows) => {
+  if (!columnsInfo || columnsInfo.length === 0) return null;
+  
+  let bestCol = null;
+  let bestScore = -Infinity;
+  const nCols = columnsInfo.length;
+
+  columnsInfo.forEach((col, idx) => {
+    const colLower = String(col.name).toLowerCase();
+    
+    // 1. Semantic Match score
+    let keywordMatch = 0.0;
+    for (const kw of TARGET_KEYWORDS) {
+      if (colLower.includes(kw)) {
+        keywordMatch += 4.0;
+        break;
+      }
+    }
+    
+    let isId = false;
+    for (const kw of ID_KEYWORDS) {
+      if (colLower.includes(kw)) {
+        isId = true;
+        keywordMatch -= 6.0;
+        break;
+      }
+    }
+    
+    // 2. Position score
+    const relativeIdx = nCols > 1 ? idx / nCols : 0.5;
+    
+    // 3. Cardinality ratio
+    const uniqueRatio = totalRows > 0 ? col.uniqueCount / totalRows : 0.0;
+    let uniqueRatioPenalty = 0.0;
+    if (uniqueRatio > 0.95 && (isId || col.type !== 'numeric')) {
+      uniqueRatioPenalty = 1.0;
+    }
+    
+    // 4. Null percentage penalty
+    const nullPct = (col.nullPercent || 0) / 100;
+    
+    // 5. Correlation score (default placeholder as 0.0 since we compute it for custom files later, but let's check key correlation tags if they exist in dataset object)
+    let meanCorr = 0.0;
+    
+    // 6. Datetime feature
+    const isDatetime = col.type === 'datetime' || colLower.includes('date') || colLower.includes('time') ? 1.0 : 0.0;
+    
+    const score = (
+      5.0 * keywordMatch +
+      2.5 * meanCorr +
+      2.0 * relativeIdx -
+      8.0 * uniqueRatioPenalty -
+      6.0 * nullPct -
+      4.0 * isDatetime
+    );
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestCol = col.name;
+    }
+  });
+  
+  return bestCol || columnsInfo[columnsInfo.length - 1].name;
+};
+
 // ==========================================
 // 4. MAIN COMPONENT DEFINITION
 // ==========================================
@@ -1226,31 +1303,40 @@ export default function App() {
   // Autocomplete and initialize states when dataset or target changes
   const handleDatasetSelect = (selectedDb) => {
     setDataset(selectedDb);
-    setGoal(selectedDb.task);
-    if (selectedDb.id === 'churn') {
-      setProblemSubtype('binary');
-    } else {
-      setProblemSubtype('multiclass');
-    }
-
-    if (selectedDb.task === 'forecasting') {
-      setDateColumn(selectedDb.columnsInfo.find(c => c.type === 'datetime')?.name || '');
-      setSplitMethod('chronological');
-    } else {
-      setDateColumn('');
-      setSplitMethod('random');
-    }
 
     if (selectedDb.task === 'clustering') {
+      setGoal('clustering');
       setTargetColumn('none');
       setTargetConfirmed(true);
       setSelectedModelOverride('kmeans_clust');
       setSelectedModels(['kmeans_clust', 'dbscan_clust']);
+      setDateColumn('');
+      setSplitMethod('random');
+      setProblemSubtype('multiclass');
     } else {
-      setTargetColumn('');
-      setTargetConfirmed(false);
-      setSelectedModelOverride('');
-      setSelectedModels([]);
+      const recTarget = selectedDb.defaultTarget || detectTargetModelJS(selectedDb.columnsInfo, selectedDb.rows) || '';
+      setTargetColumn(recTarget);
+      setTargetConfirmed(true);
+
+      const detected = autoDetectGoal(selectedDb, recTarget);
+      setGoal(detected.goal);
+      setProblemSubtype(detected.problemSubtype);
+      setDateColumn(detected.dateColumn);
+
+      if (detected.goal === 'forecasting') {
+        setSplitMethod('chronological');
+      } else {
+        setSplitMethod('random');
+      }
+
+      const models = MODEL_REGISTRY[detected.goal] || [];
+      let recModelId = models[0]?.id || '';
+      if (detected.goal === 'classification') recModelId = 'rf_class';
+      else if (detected.goal === 'regression') recModelId = selectedDb.rows >= 500 ? 'lgbm_reg' : 'rf_reg';
+      else if (detected.goal === 'forecasting') recModelId = 'prophet_time';
+      setSelectedModelOverride(recModelId);
+      setSelectedModels(models.map(m => m.id));
+      setUserOverrodeModel(false);
     }
 
     // Initialize Preprocessing configs
@@ -1437,14 +1523,9 @@ export default function App() {
           };
         });
 
-        // Autoconfigure task type based on target uniqueness if user uploaded
-        let inferredTask = 'regression';
-        const lastCol = colsInfo[colsInfo.length - 1];
-        if (lastCol) {
-          if (lastCol.type === 'categorical' || lastCol.uniqueCount < 10) {
-            inferredTask = 'classification';
-          }
-        }
+        const recommendedTarget = detectTargetModelJS(colsInfo, parsed.totalRows) || (colsInfo[colsInfo.length - 1] ? colsInfo[colsInfo.length - 1].name : colsInfo[0].name);
+        const detected = autoDetectGoal({ columnsInfo: colsInfo }, recommendedTarget);
+        let inferredTask = detected.goal || 'regression';
 
         const customDb = {
           id: 'custom_' + Date.now(),
@@ -1453,7 +1534,7 @@ export default function App() {
           rows: parsed.totalRows,
           columns: parsed.headers.length,
           columnsInfo: colsInfo,
-          defaultTarget: lastCol ? lastCol.name : colsInfo[0].name,
+          defaultTarget: recommendedTarget,
           sampleRows: parsed.rows
         };
 
@@ -2318,7 +2399,13 @@ export default function App() {
                       <span>What column are you trying to predict?</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      Just pick the column you want to predict — we'll figure out the best approach automatically.
+                      {targetColumn ? (
+                        <span>
+                          Based on meta-feature analysis, the system recommends predicting <strong className="text-indigo-600 dark:text-indigo-400">"{targetColumn}"</strong> using the <strong className="text-emerald-600 dark:text-emerald-400 capitalize">{goal === 'classification' ? `Classification (${problemSubtype})` : goal}</strong> approach.
+                        </span>
+                      ) : (
+                        "Select a column you want to predict — the system will automatically recommend the best approach."
+                      )}
                     </p>
                   </div>
 
@@ -2398,7 +2485,13 @@ export default function App() {
                       <span>Section C — Target & Feature Setup</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      Configure modeling targets and variables based on columns detected in the dataset.
+                      {targetColumn ? (
+                        <span>
+                          Based on meta-feature analysis, the system recommends predicting <strong className="text-indigo-600 dark:text-indigo-400">"{targetColumn}"</strong> using the <strong className="text-emerald-600 dark:text-emerald-400 capitalize">{goal === 'classification' ? `Classification (${problemSubtype})` : goal}</strong> approach.
+                        </span>
+                      ) : (
+                        "Configure modeling targets and variables based on columns detected in the dataset."
+                      )}
                     </p>
                   </div>
 

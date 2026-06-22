@@ -71,6 +71,7 @@ This document details the modifications and implementations completed on the Int
   - Restores granular flow including Page 2 feature selections, group-by aggregations, date-time cyclicals, and cross-validation configs.
   - Page 3 renders the complete comparison leaderboard, diagnostic metric tables, confusion matrices / residual tables, and custom loss learning curve charts.
   - Provides a prediction model picker on Page 3 next to the preview table, letting users manually pick which model outputs are presented.
+  - **Visual Model Accuracy Comparison Chart**: Includes a graphical representation of model accuracy parameters (Accuracy, F1-Score, R², RMSE, etc.) side-by-side with the leaderboard table. Interactive pill tabs allow users to dynamically switch metrics and compare relative performance of all models in real-time.
 ### 10. Meta-Feature Target Suggestion Model (Backend & Frontend UI)
 - Implemented a pre-calibrated model-based target recommendation engine (`detect_target_model` and `recommend_target_columns` in `api/utils.py`, with matching Javascript ports in `ml/src/App.jsx`) to automatically identify and recommend target columns.
 - **Frontend UI Target Selection Auto-Recommendation**: When a dataset is selected or a custom file is uploaded, the UI automatically pre-selects the recommended target column and detects the suggested modeling approach (Classification, Regression, or Forecasting) on the fly.

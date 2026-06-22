@@ -860,6 +860,7 @@ export default function App() {
 
   // Advanced Mode (two-tier UX)
   const [advancedMode, setAdvancedMode] = useState(false);
+  const [activeMetricChart, setActiveMetricChart] = useState('');
 
   // Page index (1, 2, 3)
   const [page, setPage] = useState(1);
@@ -4020,45 +4021,145 @@ export default function App() {
                   })()}
 
                   {/* Leaderboard Comparison */}
-                  {advancedMode && (
-                    <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm">
-                      <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800/60">
-                        <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Model Leaderboard</h3>
-                        <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Best values highlighted in green</span>
-                      </div>
+                  {advancedMode && (() => {
+                    const comparisonCols = Object.keys(trainingResults.comparison[0]).filter(k => k !== 'modelName');
+                    const selectedMetric = activeMetricChart || comparisonCols[0] || '';
+                    
+                    const chartData = trainingResults.comparison.map(row => {
+                      const formattedRow = { name: row.modelName };
+                      Object.entries(row).forEach(([metric, val]) => {
+                        if (metric !== 'modelName') {
+                          // Parse out percentage signs or commas
+                          let parsed = parseFloat(String(val).replace(/%/g, '').replace(/,/g, ''));
+                          if (!isNaN(parsed)) {
+                            formattedRow[metric] = parsed;
+                          }
+                        }
+                      });
+                      return formattedRow;
+                    });
 
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs text-left">
-                          <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500">
-                            <tr>
-                              <th className="py-2.5 px-4">Model Name</th>
-                              {Object.keys(trainingResults.comparison[0]).filter(k => k !== 'modelName').map(metric => (
-                                <th key={metric} className="py-2.5 px-4 text-right">{metric}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                            {trainingResults.comparison.map((row, idx) => (
-                              <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
-                                <td className="py-2.5 px-4 font-bold text-slate-800 dark:text-slate-100">{row.modelName}</td>
-                                {Object.entries(row).filter(([k]) => k !== 'modelName').map(([metric, value]) => {
-                                  const best = isBestMetric(metric, value, trainingResults.comparison);
-                                  return (
-                                    <td 
-                                      key={metric} 
-                                      className={`py-2.5 px-4 text-right font-mono font-bold ${best ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-655 dark:text-slate-400'}`}
-                                    >
-                                      {value}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    return (
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        
+                        {/* Table Pane */}
+                        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
+                          <div className="space-y-4">
+                            <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800/60">
+                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Model Leaderboard</h3>
+                              <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Best values highlighted in green</span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500">
+                                  <tr>
+                                    <th className="py-2.5 px-4">Model Name</th>
+                                    {comparisonCols.map(metric => (
+                                      <th key={metric} className="py-2.5 px-4 text-right">{metric}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                                  {trainingResults.comparison.map((row, idx) => (
+                                    <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
+                                      <td className="py-2.5 px-4 font-bold text-slate-800 dark:text-slate-100">{row.modelName}</td>
+                                      {Object.entries(row).filter(([k]) => k !== 'modelName').map(([metric, value]) => {
+                                        const best = isBestMetric(metric, value, trainingResults.comparison);
+                                        return (
+                                          <td 
+                                            key={metric} 
+                                            className={`py-2.5 px-4 text-right font-mono font-bold ${best ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-655 dark:text-slate-400'}`}
+                                          >
+                                            {value}
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Chart Pane */}
+                        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
+                          <div className="space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800/60">
+                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Accuracy & Metric Visual Comparison</h3>
+                              
+                              {/* Pill Tabs to select metric */}
+                              <div className="flex flex-wrap gap-1">
+                                {comparisonCols.map(metric => (
+                                  <button
+                                    key={metric}
+                                    type="button"
+                                    onClick={() => setActiveMetricChart(metric)}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition border ${
+                                      selectedMetric === metric
+                                        ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                        : 'bg-slate-50 dark:bg-slate-800/40 text-slate-500 border-transparent hover:bg-slate-100 dark:hover:bg-slate-805'
+                                    }`}
+                                  >
+                                    {metric}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Chart Container */}
+                            <div className="w-full h-[220px] pt-4">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.15} />
+                                  <XAxis 
+                                    dataKey="name" 
+                                    stroke="var(--text-muted)" 
+                                    fontSize={10} 
+                                    tickLine={false} 
+                                    axisLine={false}
+                                    tickFormatter={(tick) => {
+                                      // Shorten model name for chart layout
+                                      return String(tick)
+                                        .replace('Regression', 'Reg')
+                                        .replace('Classification', 'Clf')
+                                        .replace('Classifier', 'Clf')
+                                        .replace('Gradient Boosting', 'GBM')
+                                        .replace('Random Forest', 'RF');
+                                    }}
+                                  />
+                                  <YAxis 
+                                    stroke="var(--text-muted)" 
+                                    fontSize={10} 
+                                    tickLine={false} 
+                                    axisLine={false}
+                                  />
+                                  <ChartTooltip 
+                                    contentStyle={{ 
+                                      background: 'var(--bg-raised)', 
+                                      border: '1px solid var(--border)', 
+                                      borderRadius: '10px', 
+                                      fontSize: '11px',
+                                      color: 'var(--text-primary)'
+                                    }}
+                                    labelClassName="font-bold text-slate-750 dark:text-slate-200"
+                                  />
+                                  <Bar 
+                                    dataKey={selectedMetric} 
+                                    fill="#6366f1" 
+                                    radius={[6, 6, 0, 0]} 
+                                    maxBarSize={40}
+                                  />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+                        </div>
+
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Collapsible result cards for each model */}
                   {advancedMode && (

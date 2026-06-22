@@ -71,8 +71,10 @@ This document details the modifications and implementations completed on the Int
   - Restores granular flow including Page 2 feature selections, group-by aggregations, date-time cyclicals, and cross-validation configs.
   - Page 3 renders the complete comparison leaderboard, diagnostic metric tables, confusion matrices / residual tables, and custom loss learning curve charts.
   - Provides a prediction model picker on Page 3 next to the preview table, letting users manually pick which model outputs are presented.
-### 10. Meta-Feature Target Suggestion Model (Backend)
-- Implemented a pre-calibrated model-based target recommendation engine (`detect_target_model` in `api/utils.py`) to automatically identify the best target column when a dataset is uploaded.
+### 10. Meta-Feature Target Suggestion Model (Backend & Frontend UI)
+- Implemented a pre-calibrated model-based target recommendation engine (`detect_target_model` in `api/utils.py` and a matching Javascript port `detectTargetModelJS` in `ml/src/App.jsx`) to automatically identify and recommend the best target column.
+- **Frontend UI Target Selection Auto-Recommendation**: When a dataset is selected or a custom file is uploaded, the UI automatically pre-selects the recommended target column and detects the suggested modeling approach (Classification, Regression, or Forecasting) on the fly.
+- **Dynamic Recommendation Explanations**: Replaced the static selection message with dynamic text explaining the recommended target column and approach determined by the model's meta-feature analysis.
 - The scorer evaluates a combination of semantic and statistical meta-features:
   - **Semantic Match**: Scores columns based on target keyword presence (e.g. `price`, `revenue`, `churn`, `outcome`, `status`) and penalizes ID/key keywords.
   - **Relative Position**: Favors columns closer to the end of the dataset.

@@ -145,6 +145,118 @@ def detect_target_model(df: pd.DataFrame) -> str | None:
     return best_col if best_col else columns[-1]
 
 
+def recommend_target_columns(df: pd.DataFrame, threshold: float = 0.0) -> list[dict]:
+    """
+    Recommend a list of candidate target columns with their scores and suggested approaches,
+    sorted by score descending, filtering by a score threshold.
+    """
+    if df.empty:
+        return []
+    columns = list(df.columns)
+    if not columns:
+        return []
+        
+    n_rows = len(df)
+    n_cols = len(columns)
+    
+    # Identify numeric columns for correlation analysis
+    numeric_cols = [c for c in columns if pd.api.types.is_numeric_dtype(df[c])]
+    corr_matrix = None
+    if len(numeric_cols) > 1 and n_rows > 2:
+        try:
+            numeric_df = df[numeric_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+            corr_matrix = numeric_df.corr().abs()
+        except Exception:
+            pass
+            
+    recommendations = []
+    
+    for idx, col in enumerate(columns):
+        col_lower = str(col).lower()
+        
+        # 1. Semantic Match score
+        keyword_match = 0.0
+        for kw in TARGET_KEYWORDS:
+            if kw in col_lower:
+                keyword_match += 4.0
+                break
+                
+        is_id = False
+        for kw in ID_KEYWORDS:
+            if kw in col_lower:
+                is_id = True
+                keyword_match -= 6.0
+                break
+                
+        # 2. Position score
+        relative_idx = idx / n_cols if n_cols > 1 else 0.5
+        
+        # 3. Cardinality ratio
+        unique_count = df[col].nunique()
+        unique_ratio = unique_count / n_rows if n_rows > 0 else 0.0
+        
+        unique_ratio_penalty = 0.0
+        if unique_ratio > 0.95 and (is_id or not pd.api.types.is_numeric_dtype(df[col])):
+            unique_ratio_penalty = 1.0
+            
+        # 4. Null percentage penalty
+        null_pct = df[col].isna().mean()
+        
+        # 5. Correlation score
+        mean_corr = 0.0
+        if corr_matrix is not None and col in corr_matrix.columns:
+            all_corrs = corr_matrix[col].dropna()
+            if len(all_corrs) > 1:
+                mean_corr = float(all_corrs.mean())
+                
+        # 6. Type feature
+        is_datetime = 1.0 if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col_lower or "time" in col_lower else 0.0
+        
+        score = (
+            5.0 * keyword_match +
+            2.5 * mean_corr +
+            2.0 * relative_idx -
+            8.0 * unique_ratio_penalty -
+            6.0 * null_pct -
+            4.0 * is_datetime
+        )
+        
+        # Auto-detect suggested approach for this target
+        is_dt = is_datetime == 1.0
+        col_type = "datetime" if is_dt else ("numeric" if pd.api.types.is_numeric_dtype(df[col]) else "categorical")
+        
+        # Simple task type inference
+        has_date_col = any(pd.api.types.is_datetime64_any_dtype(df[c]) or "date" in str(c).lower() or "time" in str(c).lower() for c in columns if c != col)
+        
+        if col_type == "categorical":
+            approach = "classification"
+        elif col_type == "numeric":
+            if unique_count <= 10:
+                approach = "classification"
+            elif has_date_col:
+                approach = "forecasting"
+            else:
+                approach = "regression"
+        else:
+            approach = "regression"
+            
+        recommendations.append({
+            "column": col,
+            "score": round(score, 2),
+            "approach": approach
+        })
+        
+    # Sort recommendations by score descending
+    recommendations.sort(key=lambda x: -x["score"])
+    
+    # Filter by threshold, but guarantee at least the top 1 is returned
+    filtered = [r for r in recommendations if r["score"] >= threshold]
+    if not filtered and recommendations:
+        filtered = [recommendations[0]]
+        
+    return filtered
+
+
 
 def detect_column_type(df: pd.DataFrame, col: str) -> str:
     """Classify a column as 'numeric', 'datetime', or 'categorical'."""

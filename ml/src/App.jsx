@@ -762,6 +762,95 @@ const detectTargetModelJS = (columnsInfo, totalRows) => {
   return bestCol || columnsInfo[columnsInfo.length - 1].name;
 };
 
+const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
+  if (!columnsInfo || columnsInfo.length === 0) return [];
+  
+  const recommendations = [];
+  const nCols = columnsInfo.length;
+  const hasDateCol = columnsInfo.some(c => c.type === 'datetime' || String(c.name).toLowerCase().includes('date') || String(c.name).toLowerCase().includes('time'));
+
+  columnsInfo.forEach((col, idx) => {
+    const colLower = String(col.name).toLowerCase();
+    
+    // 1. Semantic Match score
+    let keywordMatch = 0.0;
+    for (const kw of TARGET_KEYWORDS) {
+      if (colLower.includes(kw)) {
+        keywordMatch += 4.0;
+        break;
+      }
+    }
+    
+    let isId = false;
+    for (const kw of ID_KEYWORDS) {
+      if (colLower.includes(kw)) {
+        isId = true;
+        keywordMatch -= 6.0;
+        break;
+      }
+    }
+    
+    // 2. Position score
+    const relativeIdx = nCols > 1 ? idx / nCols : 0.5;
+    
+    // 3. Cardinality ratio
+    const uniqueRatio = totalRows > 0 ? col.uniqueCount / totalRows : 0.0;
+    let uniqueRatioPenalty = 0.0;
+    if (uniqueRatio > 0.95 && (isId || col.type !== 'numeric')) {
+      uniqueRatioPenalty = 1.0;
+    }
+    
+    // 4. Null percentage penalty
+    const nullPct = (col.nullPercent || 0) / 100;
+    
+    // 5. Correlation score
+    let meanCorr = 0.0;
+    
+    // 6. Datetime feature
+    const isDatetime = col.type === 'datetime' || colLower.includes('date') || colLower.includes('time') ? 1.0 : 0.0;
+    
+    const score = (
+      5.0 * keywordMatch +
+      2.5 * meanCorr +
+      2.0 * relativeIdx -
+      8.0 * uniqueRatioPenalty -
+      6.0 * nullPct -
+      4.0 * isDatetime
+    );
+    
+    // Auto-detect suggested approach for this target
+    let approach = 'regression';
+    if (col.type === 'categorical') {
+      approach = 'classification';
+    } else if (col.type === 'numeric') {
+      if (col.uniqueCount <= 10) {
+        approach = 'classification';
+      } else if (hasDateCol && !colLower.includes('date') && !colLower.includes('time')) {
+        approach = 'forecasting';
+      } else {
+        approach = 'regression';
+      }
+    }
+    
+    recommendations.push({
+      column: col.name,
+      score: parseFloat(score.toFixed(2)),
+      approach: approach
+    });
+  });
+  
+  // Sort by score descending
+  recommendations.sort((a, b) => b.score - a.score);
+  
+  // Filter by threshold
+  let filtered = recommendations.filter(r => r.score >= threshold);
+  if (filtered.length === 0 && recommendations.length > 0) {
+    filtered = [recommendations[0]];
+  }
+  
+  return filtered;
+};
+
 // ==========================================
 // 4. MAIN COMPONENT DEFINITION
 // ==========================================
@@ -827,6 +916,12 @@ export default function App() {
   const [userOverrodeModel, setUserOverrodeModel] = useState(false);
   const [selectedModelOverride, setSelectedModelOverride] = useState('');
   const [activePredictionModel, setActivePredictionModel] = useState('');
+
+  const recommendedTargets = useMemo(() => {
+    if (!dataset) return [];
+    // Filter with threshold 0.0 to recommend reasonable columns
+    return recommendTargetColumnsJS(dataset.columnsInfo, dataset.rows, 0.0);
+  }, [dataset]);
 
   const getBestModelKey = (results) => {
     if (!results || !results.models) return '';
@@ -2409,6 +2504,41 @@ export default function App() {
                     </p>
                   </div>
 
+                  {recommendedTargets.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="block text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                        Recommended Candidate Targets
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {recommendedTargets.map(rec => {
+                          const isSelected = targetColumn === rec.column;
+                          return (
+                            <button
+                              key={rec.column}
+                              type="button"
+                              onClick={() => handleTargetChange(rec.column)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${
+                                isSelected
+                                  ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                  : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
+                              }`}
+                            >
+                              <span>{rec.column}</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wider ${
+                                isSelected ? 'bg-indigo-500/20 text-indigo-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                              }`}>
+                                {rec.approach}
+                              </span>
+                              <span className="text-[10px] opacity-60">
+                                score: {rec.score}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <select
                     value={targetColumn}
                     onChange={(e) => handleTargetChange(e.target.value)}
@@ -2494,6 +2624,42 @@ export default function App() {
                       )}
                     </p>
                   </div>
+
+                  {recommendedTargets.length > 0 && (
+                    <div className="space-y-2 pb-2">
+                      <span className="block text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                        Recommended Candidate Targets
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {recommendedTargets.map(rec => {
+                          const isSelected = targetColumn === rec.column;
+                          return (
+                            <button
+                              key={rec.column}
+                              type="button"
+                              disabled={targetConfirmed}
+                              onClick={() => handleTargetChange(rec.column)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${
+                                isSelected
+                                  ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                  : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
+                              } disabled:opacity-60 disabled:cursor-not-allowed`}
+                            >
+                              <span>{rec.column}</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wider ${
+                                isSelected ? 'bg-indigo-500/20 text-indigo-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                              }`}>
+                                {rec.approach}
+                              </span>
+                              <span className="text-[10px] opacity-60">
+                                score: {rec.score}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
                     {/* Target column dropdown */}

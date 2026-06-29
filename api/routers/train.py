@@ -40,6 +40,8 @@ class TrainRequest(BaseModel):
     periodic_columns: list[Any] = []
     group_by_column:  str = ""
     agg_method:       str = "mean"
+    group_by_columns:     list[str] = []
+    aggregation_mappings: dict[str, str] = {}
     # Optuna settings (new — backwards-compatible with defaults)
     use_optuna:       bool = True
     optuna_trials:    int = 25
@@ -288,6 +290,50 @@ def _run_training(sid: str, df: pd.DataFrame, req: TrainRequest):
         SESSIONS[sid]["trained_models"] = {
             key: td["model"] for key, td in trained_models.items()
         }
+
+        # ── Persist each trained model run to SQLite history ──────────────────
+        try:
+            from api.db import SessionLocal, RunHistory
+            import uuid
+            from datetime import datetime
+
+            db = SessionLocal()
+            for mname, td in trained_models.items():
+                model_result = td["metrics"]
+                if isinstance(model_result, dict) and "error" not in model_result:
+                    safe_metrics = {
+                        k: v for k, v in model_result.items()
+                        if isinstance(v, (str, float, int, bool))
+                        and k not in ("test_predictions", "test_actuals")
+                    }
+                    db_config = {
+                        "modality":      cfg.get("modality", "tabular"),
+                        "features":      cfg.get("features", []),
+                        "split":         cfg.get("split", 0.2),
+                        "split_method":  cfg.get("split_method", "random"),
+                        "normalization": cfg.get("normalization", "none"),
+                        "missing":       cfg.get("missing", "mean"),
+                        "cv_folds":      cfg.get("cv_folds", 5),
+                        "n_estimators":  cfg.get("n_estimators", 100),
+                        "learning_rate": cfg.get("learning_rate", 0.1),
+                    }
+                    db_run = RunHistory(
+                        id            = str(uuid.uuid4()),
+                        created_at    = datetime.utcnow(),
+                        modality      = cfg.get("modality", "tabular"),
+                        model_name    = mname,
+                        dataset_name  = SESSIONS[sid].get("filename", "unknown"),
+                        target_column = cfg.get("target") or "N/A",
+                        feature_count = len(cfg.get("features", [])),
+                        metrics       = safe_metrics,
+                        config        = db_config,
+                    )
+                    db.add(db_run)
+            db.commit()
+        except Exception as db_err:
+            print(f"[History] Failed to write run to DB: {db_err}")
+        finally:
+            db.close()
 
         # ── 6. Build results payload ─────────────────────────────────────
         results_payload = {}

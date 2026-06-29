@@ -7,10 +7,10 @@ Can be swapped to PostgreSQL by changing DATABASE_URL.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, JSON, String, create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy import Column, DateTime, Integer, JSON, String, create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATABASE_URL = "sqlite:///./ml_playground.db"
+DATABASE_URL = "sqlite:///./ml_hub_history.db"
 
 engine = create_engine(
     DATABASE_URL,
@@ -30,12 +30,13 @@ class RunHistory(Base):
 
     id            = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     created_at    = Column(DateTime, default=datetime.utcnow)
+    modality      = Column(String, nullable=True)
     model_name    = Column(String, nullable=False)
     dataset_name  = Column(String, nullable=True)
     target_column = Column(String, nullable=True)
     feature_count = Column(Integer, nullable=True)
-    metrics       = Column(JSON, nullable=True)   # r2, rmse, mae, cv_r2, band, …
-    config        = Column(JSON, nullable=True)   # features, split, normalization, …
+    metrics       = Column(JSON, nullable=True)
+    config        = Column(JSON, nullable=True)
 
 
 def create_tables():

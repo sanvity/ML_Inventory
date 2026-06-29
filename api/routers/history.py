@@ -14,6 +14,7 @@ router = APIRouter()
 
 
 class RunCreate(BaseModel):
+    modality:      str | None = None
     model_name:    str
     dataset_name:  str | None = None
     target_column: str | None = None
@@ -29,12 +30,22 @@ def list_history(db: Session = Depends(get_db)):
     return [_row_to_dict(r) for r in rows]
 
 
+@router.get("/history/{run_id}")
+def get_run(run_id: str, db: Session = Depends(get_db)):
+    """Fetch a single run by ID."""
+    run = db.query(RunHistory).filter(RunHistory.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return _row_to_dict(run)
+
+
 @router.post("/history", status_code=201)
 def save_run(body: RunCreate, db: Session = Depends(get_db)):
     """Save a completed training run to history."""
     run = RunHistory(
         id            = str(uuid.uuid4()),
         created_at    = datetime.utcnow(),
+        modality      = body.modality,
         model_name    = body.model_name,
         dataset_name  = body.dataset_name,
         target_column = body.target_column,
@@ -48,20 +59,22 @@ def save_run(body: RunCreate, db: Session = Depends(get_db)):
     return _row_to_dict(run)
 
 
-@router.delete("/history/{run_id}", status_code=204)
+@router.delete("/history/{run_id}")
 def delete_run(run_id: str, db: Session = Depends(get_db)):
     """Delete a run by ID."""
     run = db.query(RunHistory).filter(RunHistory.id == run_id).first()
     if not run:
-        raise HTTPException(404, "Run not found.")
+        raise HTTPException(status_code=404, detail="Run not found.")
     db.delete(run)
     db.commit()
+    return {"deleted": run_id}
 
 
 def _row_to_dict(row: RunHistory) -> dict:
     return {
         "id":            row.id,
         "created_at":    row.created_at.isoformat() if row.created_at else None,
+        "modality":      row.modality,
         "model_name":    row.model_name,
         "dataset_name":  row.dataset_name,
         "target_column": row.target_column,

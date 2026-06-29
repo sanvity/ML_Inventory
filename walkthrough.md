@@ -85,6 +85,60 @@ This document details the modifications and implementations completed on the Int
 - Integrated the target detection model within `api/routers/upload.py` to provide immediate target recommendations to the frontend.
 - Created and executed a verification script `verify_target_model.py` which passes validation checks across multiple representative datasets (e.g., housing, telecom churn, store sales).
 
+### 11. Page 3 Layout Refinement & Collapsible Sections
+- **Removed Section A/B/C Labels**: Cleaned up the headers on Page 3 by removing the hardcoded Section A/B/C prefixes (e.g., "Section B — Predictions Preview" is now "Predictions Preview").
+- **Visual Space Optimization**: Dramatically reduced default vertical space consumed by secondary metrics and diagnostics:
+  - **Feature Selection & Preprocessing Report**: Changed the default state to collapsed.
+  - **Model Leaderboard & Metric Comparison**: Wrapped this advanced-mode block in a collapsible container which is collapsed by default.
+  - **Predictions Preview**: Made this table and its paginator collapsible, collapsing by default.
+  - **Forecast Projections**: Made the forecasting recharts canvas collapsible, collapsing by default.
+  - **Model Result Details & Curves**: Disabled the auto-expansion of the first model results by default upon training completion.
+- **Enhanced Predict on New Input**: Styled the interactive real-time inference form inside a distinct, prominent container with a subtle background gradient tint, an indigo border, and a shadow/glow effect. This draws the user's attention directly to the interactive inference card.
+
+### 12. Persistent SQLite Run History System
+- **SQLite Database Integration**: Created SQLAlchemy models and database configuration in both backend frameworks (`api/db.py` and `ml/db.py`) pointing to `ml_hub_history.db` with columns for modality, model name, dataset name, target column, feature count, metrics, and configs.
+- **Automated Threaded History Writing**: Integrated database write queries into the background training workers (`api/routers/train.py` and `ml/ml_backend.py`) so completed model training metrics (excluding prediction arrays) and hyperparameter configurations are automatically saved on training completion.
+- **REST Endpoints**:
+  - `GET /api/history` - Fetches list of all history items ordered by creation date descending.
+  - `GET /api/history/{run_id}` - Fetches detailed configuration and metrics for a specific run.
+  - `DELETE /api/history/{run_id}` - Deletes a run and returns JSON confirmation `{"deleted": run_id}`.
+
+### 13. Target Selection UI Refactoring & Page 1 Bug Fixes (Advanced Mode)
+- **Resolved Advanced Mode Lock-in**:
+  - Implemented `handleParadigmChange` to cleanly transition paradigm goals (Classification, Regression, Clustering, Forecasting) in Section B.
+  - Toggling paradigms now correctly toggles/resets the confirmation state `targetConfirmed` so that the target is never locked permanently, and selects default models for the new paradigm.
+- **Candidate Target Cards Refactoring**:
+  - Simplified recommended target badges to display only `<column_name>    score: <score>`.
+  - Removed all approach/paradigm badges (e.g., `CLASSIFICATION`, `REGRESSION`, `FORECASTING`).
+  - Clicking a candidate card now updates both the target column AND switches the corresponding paradigm goal and default models.
+- **Recommendation Sentence & Dropdown Removal**:
+  - Removed the auto-recommendation text sentence starting with `Based on meta-feature analysis...` from both Simple and Advanced modes.
+  - Eliminated the select dropdown component entirely. In Advanced Mode, it is replaced with a read-only visual bar container displaying the currently selected column name (or "None Selected") alongside the Confirm/Change action buttons.
+- **Ingestion Section Summary Simplification**:
+  - Removed target column mention from the dataset loaded summary bar (showing only Rows and Columns).
+- **Duplicate/Redundant Target Mention Cleanup**:
+  - Cleaned up other repetitions of target column name across banners and helper text (e.g., changed "Your target {targetColumn}" to "The selected column" in the explanation text).
+
+### 14. Page 2 Feature Categories Grouping
+- Grouped the feature selection parameters on Page 2 into four distinct categories:
+  - **Unique IDs**: High cardinality identifier fields (UUIDs, serials, primary keys, or fields with high unique ratio).
+  - **Date/Time based**: Columns representing datetime types or containing temporal keywords.
+  - **Categories**: Categorical groupings or classes.
+  - **Influential Parameters**: Other continuous or numeric features.
+- Rendered categorized sub-headers with total column counts inside the features table.
+- **Removed "index" Substring ID/Leakage Bias**: Eliminated assumptions treating parameter names containing "index" (e.g. consumer price index, index_value) as ID or leakage variables, letting them be correctly classified as Influential Parameters or other categories based on data attributes.
+
+### 15. Automatic Temporal Feature Inference and Encoding
+- **Calendar Time Column Detection**: Automatically scan and identify columns matching calendar time terms (`Year`, `Month`, `Quarter`, `Week`, `Day`, `Hour`, `Day of Week`) in both Python backends (`api/utils.py` and `ml/ml_backend.py`).
+- **Chronological Sorting**: Sort the training/testing dataset using Year as the primary sorting key, followed by other temporal sub-keys to construct a proper timeline.
+- **Cyclical Encoding**: Apply sine/cosine transformations on cyclic columns (Month, Day of Week, Hour, Quarter, Week, Day) to preserve circular continuity (e.g. December adjacent to January).
+- **Trend-Oriented Features**:
+  - `elapsed_time` index: Continuous indicator of elapsed periods since the dataset's minimum time step.
+  - target lag/rolling features: Compute shifted Lag 1, Lag YoY, YoY Growth, Rolling Mean 3, Rolling Mean YoY of the target (shifted by 1 to prevent data leakage during training).
+- **Combined Time Dimension Evaluation**: Automatically evaluate via cross-validation scores whether predicting with the combined time dimension (`elapsed_time` + cyclical features) improves validation R² vs raw Year/Month variables.
+- **Single-Record Preprocessing**: Replicate all temporal transformations dynamically during single-record interactive prediction using saved session metadata (min/max reference values), with training averages serving as fallback values for lag/rolling features.
+- **Frontend Alignment**: Exclude detected temporal/calendar variables from automatic one-hot encoding synchronization on Page 2 in `ml/src/App.jsx`.
+
 ---
 
 ## Verification & Build Results
@@ -109,10 +163,12 @@ vite v5.4.21 building for production...
 transforming...
 ✓ 2331 modules transformed.
 rendering chunks...
+computing gzip size...
 dist/index.html                     2.47 kB │ gzip:   1.09 kB
 dist/assets/index-C6G_3qQV.css      0.06 kB │ gzip:   0.06 kB
-dist/assets/index-CLMUv7YN.js   1,018.58 kB │ gzip: 308.45 kB
-✓ built in 1.88s
+dist/assets/index-BjZQ8Gl9.js   1,046.41 kB │ gzip: 314.52 kB
+
+✓ built in 1.71s
 ```
 All components compile and build cleanly with zero errors.
 
@@ -145,4 +201,66 @@ Expected Target: 'my_target_col'
 Suggested Target: 'my_target_col'
 ✓ Success
 ```
+
+### 5. Temporal Preprocessing Pipeline Verification
+The verification script `verify_temporal_features.py` was executed with all assertions passing successfully:
+```
+=== Verification of Temporal Features Preprocessing ===
+
+Dataset columns: ['year', 'month', 'sales', 'price', 'cat_col']
+Initial config features: ['year', 'month', 'price', 'cat_col']
+Initial config OHE: ['cat_col', 'month']
+
+=== Preprocessing Results ===
+df_proc columns: ['year', 'month', 'sales', 'price', 'cat_col', 'elapsed_time', 'month_sin', 'month_cos', 'cat_col_A', 'cat_col_B', 'target_lag_1', 'target_lag_yoy', 'target_yoy_growth', 'target_rolling_mean_3', 'target_rolling_mean_yoy']
+final_features: ['price', 'elapsed_time', 'month_sin', 'month_cos', 'cat_col_A', 'cat_col_B', 'target_lag_1', 'target_lag_yoy', 'target_yoy_growth', 'target_rolling_mean_3', 'target_rolling_mean_yoy']
+categories_dict: {'cat_col': ['A', 'B']}
+
+✓ Target temporal lag/rolling features verified.
+✓ Calendar features successfully excluded from one-hot encoding list.
+✓ Chronological sorting verified.
+
+=== Single Record Preprocessing ===
+Single record shape: (1, 11)
+Single record values: [2.00000000e+00 1.40000000e+01 1.00000000e+00 6.12323400e-17
+ 1.00000000e+00 0.00000000e+00 1.16666667e+02 0.00000000e+00
+ 0.00000000e+00 1.10833333e+02 1.08333333e+02]
+Preprocessed feature values:
+  price: 2.0
+  elapsed_time: 14.0
+  month_sin: 1.0
+  month_cos: 6.123233995736766e-17
+  cat_col_A: 1.0
+  cat_col_B: 0.0
+  target_lag_1: 116.66666666666667
+  target_lag_yoy: 0.0
+  target_yoy_growth: 0.0
+  target_rolling_mean_3: 110.83333333333333
+  target_rolling_mean_yoy: 108.33333333333333
+✓ String Month parsing and cyclical calculation in single record verified.
+✓ elapsed_time calculation in single record verified.
+✓ Training averages target features fallback imputation verified.
+
+ALL PREPROCESSING PIPELINE TESTS PASSED!
+```
 All assertions passed, verifying the semantic and statistical robustness of the recommender model.
+
+### 6. Temporal Features Visibility on Page 2 and Page 3
+- **Page 2 Time Feature Encoding Panel**:
+  - Inserted a visually rich **Smart Temporal Feature Pipeline Engaged** Alert Card detailing the exact operations performed: chronological sorting, elapsed time index generation (`elapsed_time`), cyclical sin/cos encodes, and target lags/rolling means shifted by 1 to prevent target leakage.
+  - Expanded column name detection to scan both categorical and numeric fields matching calendar keywords (`year`, `month`, etc.).
+  - Resolved `week` mapping bug where it mapped to `day-of-week` instead of `week` (Week of Year with period 52).
+- **Page 3 Results and Feature Importances**:
+  - Automatically expanded the features list in mock results generation to include the new engineered variables (`elapsed_time`, `{col}_sin`, `{col}_cos`, lags, and rolling averages) when active.
+  - This makes the engineered features fully visible in Page 3's relative importances chart and Preprocessing report.
+
+### 7. Combined Year + Month Chronological Split Order
+- **Frontend Dropdowns**:
+  - Automatically prepended a new `"Combined Year + Month"` option to both `dateOptions` and `chronologicalOrderOptions` in [App.jsx](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/ml/src/App.jsx) when Year and Month columns are both detected.
+  - Updated `autoDetectGoal` to automatically select `"Combined Year + Month"` as the sorting index if Year and Month columns are present.
+- **Frontend Forecast Projections**:
+  - Implemented chronological sorting of the forecast data rows using Year + Month, parsing string month names (e.g. `Jan`, `january`) and integers.
+  - Dynamically formatted label keys to `YYYY-MM` (e.g. `2024-03`) for the forecasting chart when the combined sorting option is active.
+- **Backend Alignment**:
+  - Expanded `detect_calendar_columns` and chronological sort sequences in both [utils.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/api/utils.py) and [ml_backend.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/ml/ml_backend.py) to support `date` and `timestamp` keys.
+

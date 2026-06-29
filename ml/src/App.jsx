@@ -42,7 +42,10 @@ import {
   Flame,
   LineChart as LineChartIcon,
   RefreshCw,
-  FolderOpen
+  FolderOpen,
+  Award,
+  History,
+  Trash2
 } from 'lucide-react';
 
 // ==========================================
@@ -529,18 +532,38 @@ const nonEpochModels = [
   'arima_time', 'prophet_time'
 ];
 
-const inferAggFunction = (colName, colType) => {
+const inferAggFunction = (colName, colType, dataset = null) => {
   const name = colName.toLowerCase();
   
-  // flag/bool/stockout/binary -> max
+  if (dataset) {
+    const colMeta = dataset.columnsInfo.find(c => c.name === colName);
+    if (colMeta) {
+      const uniqueRatio = colMeta.uniqueCount / dataset.rows;
+      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) || 
+                        name.includes('id') || name === 'key';
+      
+      // Auto aggregate based on categories identified
+      if (isIdField && colType !== 'datetime') {
+        return 'mode'; // ID Features
+      } else if (colType === 'datetime' || 
+                 name.includes('date') || name.includes('time') || 
+                 name.includes('timestamp') || name.includes('year') ||
+                 name.includes('month') || name.includes('day')) {
+        return 'mode'; // Date/Time Features
+      } else if (colType === 'categorical') {
+        return 'mode'; // Categorical Features
+      }
+    }
+  }
+
+  // Influencing Features (Numeric) or fallback
   const maxKeywords = ['flag', 'bool', 'stockout', 'binary'];
   if (maxKeywords.some(kw => name.includes(kw))) {
     return 'max';
   }
   
-  // id/count/qty/units/volume/revenue/sales/sum/total/cogs/profit/expense/opex/ebitda/depreciation/ebit/interest/taxes/income/marketing -> sum
   const sumKeywords = [
-    'id', 'count', 'qty', 'units', 'volume', 'revenue', 'sales', 'sum', 'total', 
+    'count', 'qty', 'units', 'volume', 'revenue', 'sales', 'sum', 'total', 
     'cogs', 'profit', 'expense', 'opex', 'ebitda', 'depreciation', 'ebit', 
     'interest', 'taxes', 'income', 'marketing'
   ];
@@ -576,8 +599,8 @@ const computeFeatureStatuses = (db, target, dateCol) => {
     const isIdField = uniqueRatio > 0.95 && db.rows > 15;
     const isHighNulls = col.nullPercent > 40;
     
-    const containsIdOrIndex = col.name.toLowerCase().includes('index') || col.name.toLowerCase().includes('id');
-    const isLeakage = (containsIdOrIndex && !isTarget) || (Math.abs(corr) >= 0.95 && !isTarget);
+    const containsId = col.name.toLowerCase().includes('id') || col.name.toLowerCase() === 'key';
+    const isLeakage = (containsId && !isTarget) || (Math.abs(corr) >= 0.95 && !isTarget);
     
     const isNoVariance = col.uniqueCount <= 1;
     
@@ -622,6 +645,9 @@ const autoDetectGoal = (db, targetCol) => {
   const dateCol = db.columnsInfo.find(c => c.type === 'datetime');
   const hasDateColumn = !!dateCol;
 
+  const hasYearCol = db.columnsInfo.some(c => c.name.toLowerCase().includes('year'));
+  const hasMonthCol = db.columnsInfo.some(c => c.name.toLowerCase().includes('month'));
+
   if (colMeta.type === 'categorical') {
     return {
       goal: 'classification',
@@ -646,6 +672,15 @@ const autoDetectGoal = (db, targetCol) => {
         goal: 'forecasting',
         problemSubtype: 'binary',
         dateColumn: dateCol.name
+      };
+    }
+
+    // Numeric + Year & Month columns present → forecasting (with Combined Year + Month)
+    if (hasYearCol && hasMonthCol) {
+      return {
+        goal: 'forecasting',
+        problemSubtype: 'binary',
+        dateColumn: 'Combined Year + Month'
       };
     }
 
@@ -695,7 +730,7 @@ const TARGET_KEYWORDS = [
   "purchased", "y"
 ];
 
-const ID_KEYWORDS = ["id", "uuid", "index", "row_num", "rownum", "serial", "seq", "key", "unnamed"];
+const ID_KEYWORDS = ["id", "uuid", "row_num", "rownum", "serial", "seq", "key", "unnamed"];
 
 const detectTargetModelJS = (columnsInfo, totalRows) => {
   if (!columnsInfo || columnsInfo.length === 0) return null;
@@ -859,7 +894,7 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(true);
 
   // Advanced Mode (two-tier UX)
-  const [advancedMode, setAdvancedMode] = useState(false);
+  const advancedMode = true; // Hardcoded as per user request
   const [activeMetricChart, setActiveMetricChart] = useState('');
 
   // Page index (1, 2, 3)
@@ -917,6 +952,7 @@ export default function App() {
   const [userOverrodeModel, setUserOverrodeModel] = useState(false);
   const [selectedModelOverride, setSelectedModelOverride] = useState('');
   const [activePredictionModel, setActivePredictionModel] = useState('');
+  const [activeDiagModel, setActiveDiagModel] = useState('');
 
   const recommendedTargets = useMemo(() => {
     if (!dataset) return [];
@@ -988,7 +1024,10 @@ export default function App() {
   const [optunaTrials, setOptunaTrials] = useState(25);
   // Feature selection pipeline settings
   const [useFeaturePipeline, setUseFeaturePipeline] = useState(true);
-  const [expandedPipelineMock, setExpandedPipelineMock] = useState(true);
+  const [expandedPipelineMock, setExpandedPipelineMock] = useState(false);
+  const [expandedLeaderboard, setExpandedLeaderboard] = useState(false);
+  const [expandedPredictionsPreview, setExpandedPredictionsPreview] = useState(false);
+  const [expandedForecastProjections, setExpandedForecastProjections] = useState(false);
 
 
   // Side drawer panels
@@ -996,6 +1035,37 @@ export default function App() {
   const [isModelInventoryOpen, setIsModelInventoryOpen] = useState(false);
   const [selectedInventoryModel, setSelectedInventoryModel] = useState(null);
   const [activeInfoModel, setActiveInfoModel] = useState(null);
+  const [isTrainingHistoryOpen, setIsTrainingHistoryOpen] = useState(false);
+  const [trainingHistory, setTrainingHistory] = useState([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
+  const fetchTrainingHistory = async () => {
+    setIsHistoryLoading(true);
+    try {
+      const r = await fetch('http://localhost:7860/api/history');
+      if (r.ok) {
+        const data = await r.json();
+        setTrainingHistory(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error("Failed to load training history:", err);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  const deleteHistoryRun = async (runId) => {
+    try {
+      const r = await fetch(`http://localhost:7860/api/history/${runId}`, {
+        method: 'DELETE',
+      });
+      if (r.ok) {
+        setTrainingHistory(prev => prev.filter(run => run.id !== runId));
+      }
+    } catch (err) {
+      console.error("Failed to delete history run:", err);
+    }
+  };
 
   // Training states
   const [isTraining, setIsTraining] = useState(false);
@@ -1014,21 +1084,37 @@ export default function App() {
 
   const dateOptions = useMemo(() => {
     if (!dataset) return [];
-    return dataset.columnsInfo
+    const options = dataset.columnsInfo
       .filter(col => col.type === 'datetime')
       .map(col => col.name);
+    const hasYearCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('year'));
+    const hasMonthCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('month'));
+    if (hasYearCol && hasMonthCol) {
+      options.unshift("Combined Year + Month");
+    }
+    return options;
   }, [dataset]);
 
   const chronologicalOrderOptions = useMemo(() => {
     if (!dataset) return [];
-    return dataset.columnsInfo.filter(col => {
+    
+    const hasYearCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('year'));
+    const hasMonthCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('month'));
+
+    const options = dataset.columnsInfo.filter(col => {
       if (col.type === 'datetime') return true;
-      if (col.type === 'numeric') {
+      if (col.type === 'numeric' || col.type === 'categorical') {
         const nameLower = col.name.toLowerCase();
         return ['year', 'month', 'date', 'time', 'week'].some(kw => nameLower.includes(kw));
       }
       return false;
     }).map(col => col.name);
+
+    if (hasYearCol && hasMonthCol) {
+      options.unshift("Combined Year + Month");
+    }
+
+    return options;
   }, [dataset]);
 
   const categoricalOptions = useMemo(() => {
@@ -1068,6 +1154,48 @@ export default function App() {
     return [...targets, ...nonTargets];
   }, [dataset, targetColumn]);
 
+  const categorizedColumns = useMemo(() => {
+    if (!dataset) return {
+      'ID Features': [],
+      'Date/Time Features': [],
+      'Categorical Features': [],
+      'Influencing Features': []
+    };
+
+    const groups = {
+      'ID Features': [],
+      'Date/Time Features': [],
+      'Categorical Features': [],
+      'Influencing Features': []
+    };
+
+    orderedColumns.forEach(col => {
+      const nameLower = col.name.toLowerCase();
+      const uniqueRatio = col.uniqueCount / dataset.rows;
+      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) || 
+                        nameLower.includes('id') || 
+                        nameLower === 'key';
+
+      if (isIdField && col.type !== 'datetime') {
+        groups['ID Features'].push(col);
+      } else if (col.type === 'datetime' || 
+                 nameLower.includes('date') || 
+                 nameLower.includes('time') || 
+                 nameLower.includes('timestamp') ||
+                 nameLower.includes('year') ||
+                 nameLower.includes('month') ||
+                 nameLower.includes('day')) {
+        groups['Date/Time Features'].push(col);
+      } else if (col.type === 'categorical') {
+        groups['Categorical Features'].push(col);
+      } else {
+        groups['Influencing Features'].push(col);
+      }
+    });
+
+    return groups;
+  }, [orderedColumns, dataset]);
+
   const estimatedOutputRows = useMemo(() => {
     if (!dataset) return 0;
     if (!applyAggregation || groupByColumns.length === 0) return dataset.rows;
@@ -1094,7 +1222,7 @@ export default function App() {
     const lines = aggCols.map(col => {
       const colMeta = dataset?.columnsInfo.find(c => c.name === col);
       const colType = colMeta ? colMeta.type : 'numeric';
-      const fn = customAggMappings[col] || inferAggFunction(col, colType);
+      const fn = customAggMappings[col] || inferAggFunction(col, colType, dataset);
       return `    ${col} = ('${col}', '${fn}')`;
     });
     
@@ -1192,7 +1320,7 @@ export default function App() {
           label: 'Quarter',
           defaultChecked: false
         });
-      } else if (col.type === 'numeric') {
+      } else if (col.type === 'numeric' || col.type === 'categorical') {
         const nameLower = col.name.toLowerCase();
         const keywords = ['month', 'year', 'day', 'hour', 'week', 'quarter', 'dow', 'weekday'];
         const matchedKw = keywords.find(kw => nameLower.includes(kw));
@@ -1205,9 +1333,13 @@ export default function App() {
             componentType = 'year';
             label = 'Year';
             defaultChecked = true;
-          } else if (nameLower.includes('weekday') || nameLower.includes('dow') || nameLower.includes('week')) {
+          } else if (nameLower.includes('weekday') || nameLower.includes('dow')) {
             componentType = 'day-of-week';
             label = 'Day of Week';
+            defaultChecked = true;
+          } else if (nameLower.includes('week')) {
+            componentType = 'week';
+            label = 'Week of Year';
             defaultChecked = true;
           } else if (nameLower.includes('day')) {
             componentType = 'day of month';
@@ -1360,10 +1492,12 @@ export default function App() {
     setOneHotColumns(prev => {
       // Remove features no longer selected
       let updated = prev.filter(c => selectedFeaturesList.includes(c));
-      // Auto-add newly added categorical features
+      // Auto-add newly added categorical features (excluding calendar/temporal columns)
       added.forEach(f => {
         const col = dataset.columnsInfo.find(c => c.name === f);
-        if (col && col.type === 'categorical' && !updated.includes(f)) {
+        const colLower = f.toLowerCase();
+        const isCalendarCol = colLower.includes('year') || colLower.includes('month') || colLower.includes('quarter') || colLower.includes('week') || colLower.includes('day') || colLower.includes('hour') || colLower.includes('date') || colLower.includes('time');
+        if (col && col.type === 'categorical' && !isCalendarCol && !updated.includes(f)) {
           updated.push(f);
         }
       });
@@ -1477,12 +1611,12 @@ export default function App() {
   };
 
   // Handle Target column change dynamically recalculating pre-selections
-  const handleTargetChange = (newTarget) => {
+  const handleTargetChange = (newTarget, forceGoal = null) => {
     setTargetColumn(newTarget);
     if (!dataset) return;
 
-    if (!advancedMode && newTarget) {
-      // Simple Mode: auto-detect everything from target
+    if (newTarget) {
+      // Both basic and advanced modes: auto-detect everything from target
       const detected = autoDetectGoal(dataset, newTarget);
       setGoal(detected.goal);
       setProblemSubtype(detected.problemSubtype);
@@ -1515,16 +1649,32 @@ export default function App() {
       });
       setHyperparameters(hyperInits);
       setCollapsedHypers(collapseInits);
+    }
+  };
+
+  // Handle Paradigm change in Advanced Mode
+  const handleParadigmChange = (newGoal) => {
+    setGoal(newGoal);
+    setTargetConfirmed(false);
+    setSelectedModelOverride('');
+    setUserOverrodeModel(false);
+
+    if (newGoal === 'clustering') {
+      setTargetColumn('none');
+      setTargetConfirmed(true);
+      const defaultModels = (MODEL_REGISTRY['clustering'] || []).map(m => m.id);
+      setSelectedModels(defaultModels);
     } else {
-      // Advanced mode — existing behavior
-      setTargetConfirmed(false);
-      setSelectedModelOverride('');
-      const colMeta = dataset.columnsInfo.find(c => c.name === newTarget);
-      if (colMeta && colMeta.uniqueCount === 2) {
-        setProblemSubtype('binary');
-      } else {
-        setProblemSubtype('multiclass');
+      let newTarget = targetColumn;
+      if (targetColumn === 'none' || !targetColumn) {
+        const matchingRec = recommendedTargets.find(r => r.approach === newGoal);
+        newTarget = matchingRec ? matchingRec.column : '';
       }
+      setTargetColumn(newTarget);
+
+      const defaultModels = (MODEL_REGISTRY[newGoal] || []).map(m => m.id);
+      setSelectedModels(defaultModels);
+      setTargetConfirmed(false);
     }
   };
 
@@ -1664,7 +1814,7 @@ export default function App() {
     if (selectedFeaturesList.includes(col)) {
       const colMeta = dataset?.columnsInfo.find(c => c.name === col);
       if (colMeta) {
-        const defaultFn = inferAggFunction(col, colMeta.type);
+        const defaultFn = inferAggFunction(col, colMeta.type, dataset);
         setCustomAggMappings(prev => ({
           ...prev,
           [col]: defaultFn
@@ -1679,12 +1829,23 @@ export default function App() {
     const newMappings = { ...customAggMappings };
     dataset.columnsInfo.forEach(col => {
       if (!newMappings[col.name]) {
-        newMappings[col.name] = inferAggFunction(col.name, col.type);
+        newMappings[col.name] = inferAggFunction(col.name, col.type, dataset);
       }
     });
     setCustomAggMappings(newMappings);
   }, [dataset, featureSelections, groupByColumns]);
 
+  // Auto-preselect categorical columns as Group By columns when dataset loads
+  useEffect(() => {
+    if (!dataset) return;
+    const categoricalCols = dataset.columnsInfo
+      .filter(col => col.type === 'categorical')
+      .map(col => col.name);
+    setGroupByColumns(prev => {
+      const merged = [...new Set([...prev, ...categoricalCols])];
+      return merged;
+    });
+  }, [dataset]);
 
 
   // Model toggler
@@ -1735,8 +1896,81 @@ export default function App() {
   const forecastData = useMemo(() => {
     if (!dataset || goal !== 'forecasting' || !targetColumn || !dateColumn) return [];
     
-    const targetValues = dataset.sampleRows.map(r => Number(r[targetColumn])).filter(v => !isNaN(v));
-    const dates = dataset.sampleRows.map(r => String(r[dateColumn] || ''));
+    // Sort rows chronologically
+    let sortedRows = [...dataset.sampleRows];
+    if (dateColumn === 'Combined Year + Month') {
+      const yCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('year'))?.name;
+      const mCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('month'))?.name;
+      
+      const getMonthNumeric = (mVal) => {
+        if (mVal === null || mVal === undefined) return 1;
+        const mStr = String(mVal).trim().toLowerCase();
+        const MONTH_MAP = {
+          'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+          'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
+          'aug': 8, 'august': 8, 'sep': 9, 'september': 9, 'oct': 10, 'october': 10,
+          'nov': 11, 'november': 11, 'dec': 12, 'december': 12
+        };
+        const mapped = MONTH_MAP[mStr];
+        if (mapped !== undefined) return mapped;
+        const num = Number(mVal);
+        return isNaN(num) ? 1 : num;
+      };
+
+      sortedRows.sort((a, b) => {
+        const yA = Number(a[yCol]) || 0;
+        const yB = Number(b[yCol]) || 0;
+        if (yA !== yB) return yA - yB;
+        
+        const mA = getMonthNumeric(a[mCol]);
+        const mB = getMonthNumeric(b[mCol]);
+        return mA - mB;
+      });
+    } else {
+      sortedRows.sort((a, b) => {
+        const valA = a[dateColumn];
+        const valB = b[dateColumn];
+        const numA = Number(valA);
+        const numB = Number(valB);
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return numA - numB;
+        }
+        const dateA = Date.parse(String(valA || ''));
+        const dateB = Date.parse(String(valB || ''));
+        if (!isNaN(dateA) && !isNaN(dateB)) {
+          return dateA - dateB;
+        }
+        return String(valA || '').localeCompare(String(valB || ''));
+      });
+    }
+
+    const targetValues = sortedRows.map(r => Number(r[targetColumn])).filter(v => !isNaN(v));
+    
+    let dates;
+    if (dateColumn === 'Combined Year + Month') {
+      const yCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('year'))?.name;
+      const mCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('month'))?.name;
+      dates = sortedRows.map(r => {
+        const yVal = r[yCol];
+        let mVal = r[mCol];
+        if (mVal !== null && mVal !== undefined) {
+          const mStr = String(mVal).trim().toLowerCase();
+          const MONTH_MAP = {
+            'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+            'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
+            'aug': 8, 'august': 8, 'sep': 9, 'september': 9, 'oct': 10, 'october': 10,
+            'nov': 11, 'november': 11, 'dec': 12, 'december': 12
+          };
+          const mapped = MONTH_MAP[mStr];
+          if (mapped !== undefined) mVal = mapped;
+        }
+        const yStr = yVal !== null && yVal !== undefined ? String(yVal).trim() : 'YYYY';
+        const mStr = mVal !== null && mVal !== undefined ? String(mVal).trim().padStart(2, '0') : 'MM';
+        return `${yStr}-${mStr}`;
+      });
+    } else {
+      dates = sortedRows.map(r => String(r[dateColumn] || ''));
+    }
     
     const histCount = Math.min(targetValues.length, 60);
     const startIndex = targetValues.length - histCount;
@@ -1963,6 +2197,39 @@ export default function App() {
         setTrainingResults(results);
         setIsTraining(false);
         setPage(3);
+
+        // Persist each trained model run to SQLite history on backend
+        if (results && results.models) {
+          Object.entries(results.models).forEach(async ([modelId, modelData]) => {
+            const payload = {
+              modality: goal || 'tabular',
+              model_name: modelData.name || modelId,
+              dataset_name: dataset?.name || 'uploaded_dataset',
+              target_column: targetColumn || 'N/A',
+              feature_count: selectedFeaturesList.length,
+              metrics: modelData.metrics || {},
+              config: {
+                features: selectedFeaturesList,
+                split: splitRatio / 100,
+                split_method: splitMethod || 'random',
+                normalization: normalizationStrategies,
+                missing: missingStrategies,
+                apply_aggregation: applyAggregation,
+                group_by_columns: groupByColumns,
+                aggregation_mappings: customAggMappings
+              }
+            };
+            try {
+              await fetch('http://localhost:7860/api/history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+            } catch (err) {
+              console.error("Failed to save run to history:", err);
+            }
+          });
+        }
         
         // Set active prediction model
         let defaultActiveModel = '';
@@ -1972,12 +2239,11 @@ export default function App() {
           // Find the best model key from results among selectedModels
           defaultActiveModel = getBestModelKey(results) || selectedModels[0] || '';
         }
-        setActivePredictionModel(defaultActiveModel);
+         setActivePredictionModel(defaultActiveModel);
+        setActiveDiagModel(defaultActiveModel);
         
-        // Expand first model results by default
-        if (selectedModels.length > 0) {
-          setExpandedTrainedModels({ [selectedModels[0]]: true });
-        }
+        // Keep all model results collapsed by default to save space
+        setExpandedTrainedModels({});
       }
     };
 
@@ -1989,8 +2255,42 @@ export default function App() {
     const trained = {};
     const comparisonRows = [];
 
-    // Selected features to calculate importances
-    const features = selectedFeaturesList.length > 0 ? selectedFeaturesList : ['feature_1', 'feature_2'];
+    // Selected features to calculate importances (automatically expanded to include engineered temporal/cyclical features)
+    let expandedFeatures = [...selectedFeaturesList];
+    detectedTimeComponents.forEach(comp => {
+      if (timeComponentToggles[comp.id]) {
+        if (comp.componentType === 'year') {
+          if (!expandedFeatures.includes(`${comp.colName}_norm`)) {
+            expandedFeatures.push(`${comp.colName}_norm`);
+          }
+          expandedFeatures = expandedFeatures.filter(f => f !== comp.colName);
+        } else {
+          if (!expandedFeatures.includes(`${comp.colName}_sin`)) {
+            expandedFeatures.push(`${comp.colName}_sin`);
+          }
+          if (!expandedFeatures.includes(`${comp.colName}_cos`)) {
+            expandedFeatures.push(`${comp.colName}_cos`);
+          }
+          expandedFeatures = expandedFeatures.filter(f => f !== comp.colName);
+        }
+      }
+    });
+    const hasYear = detectedTimeComponents.some(c => c.componentType === 'year' && timeComponentToggles[c.id]);
+    const hasMonth = detectedTimeComponents.some(c => c.componentType === 'month' && timeComponentToggles[c.id]);
+    if (hasYear || hasMonth) {
+      if (!expandedFeatures.includes("elapsed_time")) {
+        expandedFeatures.push("elapsed_time");
+      }
+    }
+    if (goal === 'forecasting' && targetColumn) {
+      const lags = [`${targetColumn}_lag_1`, `${targetColumn}_lag_yoy`, `${targetColumn}_roll_mean_3`, `${targetColumn}_roll_mean_yoy`];
+      lags.forEach(l => {
+        if (!expandedFeatures.includes(l)) {
+          expandedFeatures.push(l);
+        }
+      });
+    }
+    const features = expandedFeatures.length > 0 ? expandedFeatures : ['feature_1', 'feature_2'];
 
     selectedModels.forEach(modelId => {
       const modelMeta = MODEL_REGISTRY[goal].find(m => m.id === modelId);
@@ -2044,7 +2344,8 @@ export default function App() {
         overallScoreBadge = `Accuracy ${(acc * 100).toFixed(1)}%`;
 
         // Confusion matrix proportions
-        const testSize = Math.round(dataset.rows * (1 - splitRatio / 100));
+        const activeRows = (applyAggregation && groupByColumns.length > 0) ? estimatedOutputRows : dataset.rows;
+        const testSize = Math.round(activeRows * (1 - splitRatio / 100));
         const tp = Math.round(testSize * 0.45 * acc);
         const tn = Math.round(testSize * 0.42 * acc);
         const fp = Math.round(testSize * 0.08 * (1 - acc));
@@ -2301,15 +2602,18 @@ export default function App() {
             <span>Data Overview</span>
           </button>
 
-          {/* Advanced Settings Toggle */}
+          {/* Training History (Available on all pages) */}
           <button 
-            onClick={() => setAdvancedMode(!advancedMode)}
-            className={`text-xs font-medium flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg border transition ${advancedMode ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-500 dark:text-indigo-400 font-bold' : 'bg-slate-50 dark:bg-slate-800/60 border-slate-100 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-300'}`}
+            onClick={() => {
+              fetchTrainingHistory();
+              setIsTrainingHistoryOpen(true);
+            }}
+            className="text-xs font-medium flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650 rounded-lg transition"
           >
-            <Settings className="w-4 h-4 text-slate-500" />
-            <span>Advanced Settings</span>
-            <span className={`w-2 h-2 rounded-full ${advancedMode ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`} />
+            <History className="w-4 h-4 text-slate-500" />
+            <span>Training History</span>
           </button>
+
 
           {/* Light/Dark Toggle */}
           <button 
@@ -2338,7 +2642,7 @@ export default function App() {
                 <div>
                   <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
                     <Database className="w-5 h-5 text-indigo-500" />
-                    <span>Section A — Data Ingestion</span>
+                    <span>Data Ingestion</span>
                   </h2>
                   <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
                     Upload your own dataset (CSV, JSON, or Excel) or load a sample dataset instantly.
@@ -2395,21 +2699,18 @@ export default function App() {
                       <div>
                         Columns: <span className="text-slate-800 dark:text-slate-100 font-bold">{dataset.columns}</span>
                       </div>
-                      <div>
-                        Target: <span className="text-indigo-500 font-bold">{targetColumn === 'none' ? 'None (Clustering)' : targetColumn}</span>
-                      </div>
                     </div>
                   </div>
                 )}
               </section>
 
               {/* SECTION B — WHAT DO YOU WANT TO DO? (Advanced Mode Only) */}
-              {advancedMode && dataset && (
+              {false && advancedMode && dataset && (
                 <section className="space-y-6">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
                       <Brain className="w-5 h-5 text-indigo-500" />
-                      <span>Section B — What do you want to do with your data?</span>
+                      <span>What do you want to do with your data?</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
                       Choose the machine learning paradigm that fits your analytics objective.
@@ -2419,7 +2720,7 @@ export default function App() {
                   <div className="flex flex-row gap-3 overflow-x-auto pb-2 scrollbar-none">
                     {/* Paradigm Cards */}
                     <button 
-                      onClick={() => { setGoal('classification'); setTargetColumn(targetOptions[0] || ''); }}
+                      onClick={() => handleParadigmChange('classification')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'classification' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
                       <div className="flex items-start justify-between w-full">
@@ -2435,7 +2736,7 @@ export default function App() {
                     </button>
 
                     <button 
-                      onClick={() => { setGoal('regression'); setTargetColumn(targetOptions[0] || ''); }}
+                      onClick={() => handleParadigmChange('regression')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'regression' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
                       <div className="flex items-start justify-between w-full">
@@ -2451,7 +2752,7 @@ export default function App() {
                     </button>
 
                     <button 
-                      onClick={() => { setGoal('clustering'); setTargetColumn('none'); }}
+                      onClick={() => handleParadigmChange('clustering')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'clustering' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
                       <div className="flex items-start justify-between w-full">
@@ -2467,7 +2768,7 @@ export default function App() {
                     </button>
 
                     <button 
-                      onClick={() => { setGoal('forecasting'); setTargetColumn(targetOptions[0] || ''); }}
+                      onClick={() => handleParadigmChange('forecasting')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'forecasting' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
                       <div className="flex items-start justify-between w-full">
@@ -2485,9 +2786,8 @@ export default function App() {
                 </section>
               )}
 
-              {/* SECTION C — TARGET & FEATURE SETUP */}
               {/* Simple Mode: streamlined "What do you want to predict?" */}
-              {!advancedMode && dataset && (
+              {dataset && (
                 <section className="bg-gradient-to-br from-slate-50/60 to-indigo-50/30 dark:from-slate-800/30 dark:to-indigo-900/10 border border-slate-100 dark:border-slate-800 p-6 rounded-2xl space-y-5">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
@@ -2495,13 +2795,7 @@ export default function App() {
                       <span>What column are you trying to predict?</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      {targetColumn ? (
-                        <span>
-                          Based on meta-feature analysis, the system recommends predicting <strong className="text-indigo-600 dark:text-indigo-400">"{targetColumn}"</strong> using the <strong className="text-emerald-600 dark:text-emerald-400 capitalize">{goal === 'classification' ? `Classification (${problemSubtype})` : goal}</strong> approach.
-                        </span>
-                      ) : (
-                        "Select a column you want to predict — the system will automatically recommend the best approach."
-                      )}
+                      Select a column you want to predict — the system will automatically recommend the best approach.
                     </p>
                   </div>
 
@@ -2525,11 +2819,6 @@ export default function App() {
                               }`}
                             >
                               <span>{rec.column}</span>
-                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wider ${
-                                isSelected ? 'bg-indigo-500/20 text-indigo-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                              }`}>
-                                {rec.approach}
-                              </span>
                               <span className="text-[10px] opacity-60">
                                 score: {rec.score}
                               </span>
@@ -2539,17 +2828,6 @@ export default function App() {
                       </div>
                     </div>
                   )}
-
-                  <select
-                    value={targetColumn}
-                    onChange={(e) => handleTargetChange(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold shadow-sm"
-                  >
-                    <option value="">-- Select your target column --</option>
-                    {targetOptions.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
 
                   {/* Auto-detection summary card */}
                   {targetColumn && goal && (
@@ -2597,9 +2875,9 @@ export default function App() {
 
                       {/* Explanation text */}
                       <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed border-t border-slate-100 dark:border-slate-800/60 pt-3">
-                        {goal === 'classification' && `Your target "${targetColumn}" has ${dataset.columnsInfo.find(c => c.name === targetColumn)?.uniqueCount || '?'} unique values — we'll train classification models to predict categorical outcomes.`}
-                        {goal === 'regression' && `Your target "${targetColumn}" is a continuous numeric column — we'll train regression models to estimate its value.`}
-                        {goal === 'forecasting' && `Your target "${targetColumn}" is numeric and your dataset has a datetime column (${dateColumn}) — we'll use time series forecasting.`}
+                        {goal === 'classification' && `The selected column has ${dataset.columnsInfo.find(c => c.name === targetColumn)?.uniqueCount || '?'} unique values — we'll train classification models to predict categorical outcomes.`}
+                        {goal === 'regression' && `The selected column is a continuous numeric column — we'll train regression models to estimate its value.`}
+                        {goal === 'forecasting' && `The selected column is numeric and your dataset has a datetime column (${dateColumn}) — we'll use time series forecasting.`}
                         {' '}All suitable models will be trained and the best performer will be auto-selected.
                       </p>
                     </div>
@@ -2608,21 +2886,15 @@ export default function App() {
               )}
 
               {/* SECTION C — TARGET & FEATURE SETUP (Advanced Mode) */}
-              {advancedMode && dataset && goal && (
+              {false && advancedMode && dataset && goal && (
                 <section className="bg-slate-50/40 dark:bg-slate-800/25 border border-slate-100 dark:border-slate-800 p-6 rounded-2xl space-y-6">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
                       <Settings className="w-5 h-5 text-indigo-500" />
-                      <span>Section C — Target & Feature Setup</span>
+                      <span>Target & Feature Setup</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      {targetColumn ? (
-                        <span>
-                          Based on meta-feature analysis, the system recommends predicting <strong className="text-indigo-600 dark:text-indigo-400">"{targetColumn}"</strong> using the <strong className="text-emerald-600 dark:text-emerald-400 capitalize">{goal === 'classification' ? `Classification (${problemSubtype})` : goal}</strong> approach.
-                        </span>
-                      ) : (
-                        "Configure modeling targets and variables based on columns detected in the dataset."
-                      )}
+                      Configure modeling targets and variables based on columns detected in the dataset.
                     </p>
                   </div>
 
@@ -2639,7 +2911,7 @@ export default function App() {
                               key={rec.column}
                               type="button"
                               disabled={targetConfirmed}
-                              onClick={() => handleTargetChange(rec.column)}
+                              onClick={() => handleTargetChange(rec.column, rec.approach)}
                               className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${
                                 isSelected
                                   ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
@@ -2647,11 +2919,6 @@ export default function App() {
                               } disabled:opacity-60 disabled:cursor-not-allowed`}
                             >
                               <span>{rec.column}</span>
-                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wider ${
-                                isSelected ? 'bg-indigo-500/20 text-indigo-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                              }`}>
-                                {rec.approach}
-                              </span>
                               <span className="text-[10px] opacity-60">
                                 score: {rec.score}
                               </span>
@@ -2663,22 +2930,14 @@ export default function App() {
                   )}
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                    {/* Target column dropdown */}
+                    {/* Target column selection display */}
                     {goal !== 'clustering' ? (
                       <div className="space-y-2">
-                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Target Column</label>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Selected Target</label>
                         <div className="flex space-x-2">
-                          <select 
-                            value={targetColumn} 
-                            disabled={targetConfirmed}
-                            onChange={(e) => handleTargetChange(e.target.value)}
-                            className="flex-1 bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60 font-semibold"
-                          >
-                            <option value="">-- Choose Target Column --</option>
-                            {targetOptions.map(opt => (
-                              <option key={opt} value={opt}>{opt}</option>
-                            ))}
-                          </select>
+                          <div className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-semibold text-slate-800 dark:text-slate-150 shadow-sm flex items-center min-h-[38px] select-none">
+                            {targetColumn ? targetColumn : <span className="text-slate-400 dark:text-slate-600 font-medium">None Selected</span>}
+                          </div>
                           
                            {!targetConfirmed ? (
                              <button
@@ -2698,7 +2957,7 @@ export default function App() {
                                    setSelectedModels([recModelId]);
                                  }
                                }}
-                               className={`text-xs px-4 py-2 font-bold border rounded-lg transition ${targetColumn ? 'bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500' : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-600 dark:border-slate-800 cursor-not-allowed shadow-none'}`}
+                               className={`text-xs px-4 py-2 font-bold border rounded-lg transition ${targetColumn ? 'bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500 shadow-sm' : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-600 dark:border-slate-800 cursor-not-allowed shadow-none'}`}
                              >
                                Confirm
                              </button>
@@ -2710,7 +2969,7 @@ export default function App() {
                                  setSelectedModelOverride('');
                                  setUserOverrodeModel(false);
                                }}
-                               className="text-xs px-4 py-2 font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg transition"
+                               className="text-xs px-4 py-2 font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-655 dark:text-slate-300 rounded-lg transition shadow-sm"
                              >
                                Change
                              </button>
@@ -2719,8 +2978,8 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Target Column</label>
-                        <div className="w-full bg-slate-100/50 dark:bg-slate-800/50 border border-slate-150 dark:border-slate-700/80 rounded-lg px-3 py-2 text-sm text-slate-400 select-none">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Selected Target</label>
+                        <div className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-lg px-3 py-2 text-sm text-slate-450 dark:text-slate-550 select-none min-h-[38px] flex items-center font-medium">
                           N/A - Clustering Mode
                         </div>
                       </div>
@@ -2749,60 +3008,9 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Date/Time column (Time Series only) */}
-                    {goal === 'forecasting' && (
-                      <div className="space-y-2">
-                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date/Time Column</label>
-                        <select 
-                          value={dateColumn} 
-                          disabled={targetConfirmed}
-                          onChange={(e) => setDateColumn(e.target.value)}
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60 font-semibold"
-                        >
-                          <option value="">-- Select date column --</option>
-                          {dateOptions.map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Lightweight Recommended Model Banner */}
-                  {targetConfirmed && (
-                    <div className="bg-white dark:bg-slate-900 border border-indigo-500/15 dark:border-indigo-500/20 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center font-bold text-xs shadow-inner">
-                          ★
-                        </div>
-                        <div>
-                          <span className="text-[9px] font-bold text-indigo-500 uppercase block tracking-wider">Recommended Model</span>
-                          <span className="font-bold text-slate-800 dark:text-slate-100 text-sm">
-                            {MODEL_REGISTRY[goal]?.find(m => m.id === selectedModelOverride)?.name || 'Random Forest'}
-                          </span>
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center space-x-2 w-full md:w-auto">
-                        <span className="text-xs text-slate-400 dark:text-slate-500 font-semibold whitespace-nowrap">Override Choice:</span>
-                        <select
-                          value={selectedModelOverride}
-                          onChange={(e) => {
-                            setSelectedModelOverride(e.target.value);
-                            setUserOverrodeModel(true);
-                            if (advancedMode) {
-                              setSelectedModels([e.target.value]);
-                            }
-                          }}
-                          className="flex-1 md:flex-initial bg-slate-50 dark:bg-slate-950 border border-slate-150 dark:border-slate-800 rounded-lg px-3 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-semibold text-slate-700 dark:text-slate-350"
-                        >
-                          {recommendedModelsList.map(m => (
-                            <option key={m.id} value={m.id}>{m.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  )}
+
                 </section>
               )}
 
@@ -2812,57 +3020,86 @@ export default function App() {
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
                       <CheckCircle className="w-5 h-5 text-indigo-500" />
-                      <span>Section D — Model Selection</span>
+                      <span>Model Selection</span>
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      Select one or more algorithms to train. Multi-selection compares results side-by-side.
+                      Select one or more algorithms to train. Recommended models are highlighted. Multi-selection compares results side-by-side.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {recommendedModelsList.map((model) => {
-                      const isSelected = selectedModels.includes(model.id);
-                      return (
-                        <div 
-                          key={model.id}
-                          onClick={() => toggleModelSelection(model.id)}
-                          className={`relative border rounded-xl p-2 cursor-pointer bg-slate-50/20 dark:bg-slate-800/10 hover:shadow-sm transition flex flex-col justify-between h-28 ${isSelected ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-150 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
-                        >
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedInventoryModel(model);
-                              setIsModelInventoryOpen(true);
-                            }}
-                            className="absolute top-2 right-2 p-0.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-850 text-slate-400 hover:text-slate-600 dark:hover:text-slate-350 transition z-10"
-                          >
-                            <Info className="w-3.5 h-3.5" />
-                          </button>
-
-                          <div className="space-y-0.5 pr-6">
-                            <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center space-x-1">
-                              {isSelected ? (
-                                <CheckSquare className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />
-                              ) : (
-                                <Square className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-                              )}
-                              <span className="truncate">{model.name}</span>
-                            </h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 leading-tight">{model.desc}</p>
-                          </div>
-
-                          {/* Pros & Cons Tags */}
-                          <div className="flex flex-wrap gap-1 mt-1 overflow-hidden h-5">
-                            {model.pros.slice(0, 1).map((tag, idx) => (
-                              <span key={idx} className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold truncate max-w-[130px]">
-                                + {tag}
-                              </span>
-                            ))}
-                          </div>
+                  {Object.entries(MODEL_REGISTRY).sort(([a], [b]) => {
+                    const aRec = a === goal || (goal === 'forecasting' && a === 'regression');
+                    const bRec = b === goal || (goal === 'forecasting' && b === 'regression');
+                    if (aRec && !bRec) return -1;
+                    if (!aRec && bRec) return 1;
+                    if (a === goal) return -1; // forecasting before regression within recommended
+                    if (b === goal) return 1;
+                    return 0;
+                  }).map(([category, models]) => {
+                    const isRecommendedCategory = category === goal || (goal === 'forecasting' && category === 'regression');
+                    const categoryLabel = { classification: 'Classification', regression: 'Regression', clustering: 'Clustering', forecasting: 'Forecasting' }[category] || category;
+                    const recommendedLabel = category === goal ? ' — Recommended' : (goal === 'forecasting' && category === 'regression') ? ' — Also Applicable' : '';
+                    return (
+                      <div key={category} className="space-y-2">
+                        <div className="flex items-center space-x-2">
+                          <span className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full ${isRecommendedCategory ? 'bg-indigo-500/10 text-indigo-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {categoryLabel}{recommendedLabel}
+                          </span>
+                          <div className="flex-1 h-px bg-slate-100 dark:bg-slate-800" />
                         </div>
-                      );
-                    })}
-                  </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                          {models.map((model) => {
+                            const isSelected = selectedModels.includes(model.id);
+                            const isRecommended = isRecommendedCategory;
+                            return (
+                              <div
+                                key={model.id}
+                                onClick={() => toggleModelSelection(model.id)}
+                                className={`relative border rounded-xl p-2 cursor-pointer hover:shadow-sm transition flex flex-col justify-between h-28 ${
+                                  isSelected
+                                    ? 'border-indigo-500 bg-indigo-500/5 dark:bg-indigo-500/10'
+                                    : isRecommended
+                                    ? 'border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/30 dark:bg-indigo-900/10 hover:border-indigo-400'
+                                    : 'border-slate-150 dark:border-slate-800 bg-slate-50/10 dark:bg-slate-800/10 opacity-75 hover:opacity-100 hover:border-slate-300 dark:hover:border-slate-600'
+                                }`}
+                              >
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedInventoryModel(model);
+                                    setIsModelInventoryOpen(true);
+                                  }}
+                                  className="absolute top-2 right-2 p-0.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-850 text-slate-400 hover:text-slate-600 dark:hover:text-slate-350 transition z-10"
+                                >
+                                  <Info className="w-3.5 h-3.5" />
+                                </button>
+
+                                <div className="space-y-0.5 pr-6">
+                                  <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center space-x-1">
+                                    {isSelected ? (
+                                      <CheckSquare className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />
+                                    ) : (
+                                      <Square className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                                    )}
+                                    <span className="truncate">{model.name}</span>
+                                  </h3>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 leading-tight">{model.desc}</p>
+                                </div>
+
+                                <div className="flex flex-wrap gap-1 mt-1 overflow-hidden h-5">
+                                  {model.pros.slice(0, 1).map((tag, idx) => (
+                                    <span key={idx} className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold truncate max-w-[130px]">
+                                      + {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </section>
               )}
 
@@ -2923,96 +3160,108 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
-                        {orderedColumns.map((col) => {
-                          const isTarget = col.name === targetColumn;
-                          const isDate = col.name === dateColumn;
-                          const isSelected = featureSelections[col.name];
-                          const status = featureStatuses[col.name] || { corr: 0, warning: '' };
-                          const correlation = status.corr;
-                          const warning = status.warning;
-                          
-                          // Pearson visual bar configuration
-                          const absCorr = Math.min(1.0, Math.abs(correlation));
-                          const isNegative = correlation < 0;
-                          const barColor = isNegative ? 'bg-rose-400' : 'bg-indigo-500';
-
+                        {Object.entries(categorizedColumns).map(([catName, catCols]) => {
+                          if (catCols.length === 0) return null;
                           return (
-                            <tr 
-                              key={col.name}
-                              className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/10 ${isTarget ? 'bg-amber-500/5 dark:bg-amber-500/10' : isSelected ? 'text-slate-800 dark:text-slate-100' : 'opacity-60 text-slate-400'}`}
-                            >
-                              {/* Selection & Name */}
-                              <td className="py-1 px-3">
-                                <div className="flex items-center space-x-2.5">
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected || false}
-                                    disabled={isTarget || isDate}
-                                    onChange={(e) => {
-                                      setFeatureSelections({
-                                        ...featureSelections,
-                                        [col.name]: e.target.checked
-                                      });
-                                    }}
-                                    className="rounded border-slate-200 dark:border-slate-700 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                                  />
-                                  <div className="flex flex-col">
-                                    <div className="flex items-center space-x-1.5">
-                                      <span className="font-semibold">{col.name}</span>
-                                      {isTarget && (
-                                        <span className="text-[8px] font-bold px-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 uppercase tracking-wider">Target</span>
-                                      )}
-                                      {isDate && (
-                                        <span className="text-[8px] font-bold px-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 uppercase tracking-wider">Time arrow</span>
-                                      )}
-                                      {warning && (
-                                        <span className="text-[8px] font-bold px-1 rounded bg-rose-500/10 text-rose-500 border border-rose-500/20 uppercase tracking-wider flex items-center space-x-0.5">
-                                          <span>⚠</span> <span>{warning}</span>
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-
-                              {/* Type */}
-                              <td className="py-1 px-3 capitalize text-slate-400 font-mono text-[10px]">
-                                {col.type}
-                              </td>
-
-                              {/* Nulls */}
-                              <td className="py-1 px-3 text-slate-400 text-[10px]">
-                                {col.missing > 0 ? (
-                                  <span className="text-amber-500 font-semibold">{col.missing} ({col.nullPercent}%)</span>
-                                ) : (
-                                  <span>0 (0%)</span>
-                                )}
-                              </td>
-
-                              {/* Target Correlation */}
-                              {goal !== 'clustering' && (
-                                <td className="py-1 px-3">
-                                  {!isTarget ? (
-                                    <div className="flex items-center space-x-2 justify-end w-40 ml-auto group relative select-none">
-                                      <span className={`text-[10px] font-semibold font-mono w-10 text-right ${isNegative ? 'text-rose-500' : 'text-slate-600 dark:text-slate-400'}`}>
-                                        {correlation.toFixed(2)}
-                                      </span>
-                                      <div className="flex-1 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden flex justify-end">
-                                        <div 
-                                          className={`h-full ${barColor}`} 
-                                          style={{ width: `${Math.round(absCorr * 100)}%` }} 
-                                        />
-                                      </div>
-                                      <div className="absolute right-0 bottom-full mb-1.5 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] font-medium px-2 py-1 rounded shadow-md z-10 w-44 pointer-events-none text-center">
-                                        Pearson linear coefficient. Negative correlations are shown in red.
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <span className="text-slate-400 block text-right pr-4 font-mono">-</span>
-                                  )}
+                            <React.Fragment key={catName}>
+                              <tr className="bg-slate-50/50 dark:bg-slate-800/20 text-slate-700 dark:text-slate-200 font-bold border-t border-b border-slate-150/60 dark:border-slate-800/60 select-none">
+                                <td colSpan={goal === 'clustering' ? 3 : 4} className="py-2 px-3 text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 font-extrabold bg-slate-50/10 dark:bg-slate-900/5">
+                                  {catName} ({catCols.length})
                                 </td>
-                              )}
-                            </tr>
+                              </tr>
+                              {catCols.map((col) => {
+                                const isTarget = col.name === targetColumn;
+                                const isDate = col.name === dateColumn;
+                                const isSelected = featureSelections[col.name];
+                                const status = featureStatuses[col.name] || { corr: 0, warning: '' };
+                                const correlation = status.corr;
+                                const warning = status.warning;
+                                
+                                // Pearson visual bar configuration
+                                const absCorr = Math.min(1.0, Math.abs(correlation));
+                                const isNegative = correlation < 0;
+                                const barColor = isNegative ? 'bg-rose-400' : 'bg-indigo-500';
+
+                                return (
+                                  <tr 
+                                    key={col.name}
+                                    className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/10 border-b border-slate-100/50 dark:border-slate-800/20 ${isTarget ? 'bg-amber-500/5 dark:bg-amber-500/10' : isSelected ? 'text-slate-800 dark:text-slate-100' : 'opacity-60 text-slate-400'}`}
+                                  >
+                                    {/* Selection & Name */}
+                                    <td className="py-1 px-3">
+                                      <div className="flex items-center space-x-2.5">
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected || false}
+                                          disabled={isTarget || isDate}
+                                          onChange={(e) => {
+                                            setFeatureSelections({
+                                              ...featureSelections,
+                                              [col.name]: e.target.checked
+                                            });
+                                          }}
+                                          className="rounded border-slate-200 dark:border-slate-700 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                        />
+                                        <div className="flex flex-col">
+                                          <div className="flex items-center space-x-1.5">
+                                            <span className="font-semibold">{col.name}</span>
+                                            {isTarget && (
+                                              <span className="text-[8px] font-bold px-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 uppercase tracking-wider">Target</span>
+                                            )}
+                                            {isDate && (
+                                              <span className="text-[8px] font-bold px-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 uppercase tracking-wider">Time arrow</span>
+                                            )}
+                                            {warning && (
+                                              <span className="text-[8px] font-bold px-1 rounded bg-rose-500/10 text-rose-500 border border-rose-500/20 uppercase tracking-wider flex items-center space-x-0.5">
+                                                <span>⚠</span> <span>{warning}</span>
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* Type */}
+                                    <td className="py-1 px-3 capitalize text-slate-400 font-mono text-[10px]">
+                                      {col.type}
+                                    </td>
+
+                                    {/* Nulls */}
+                                    <td className="py-1 px-3 text-slate-400 text-[10px]">
+                                      {col.missing > 0 ? (
+                                        <span className="text-amber-500 font-semibold">{col.missing} ({col.nullPercent}%)</span>
+                                      ) : (
+                                        <span>0 (0%)</span>
+                                      )}
+                                    </td>
+
+                                    {/* Target Correlation */}
+                                    {goal !== 'clustering' && (
+                                      <td className="py-1 px-3">
+                                        {!isTarget ? (
+                                          <div className="flex items-center space-x-2 justify-end w-40 ml-auto group relative select-none">
+                                            <span className={`text-[10px] font-semibold font-mono w-10 text-right ${isNegative ? 'text-rose-500' : 'text-slate-600 dark:text-slate-400'}`}>
+                                              {correlation.toFixed(2)}
+                                            </span>
+                                            <div className="flex-1 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden flex justify-end">
+                                              <div 
+                                                className={`h-full ${barColor}`} 
+                                                style={{ width: `${Math.round(absCorr * 100)}%` }} 
+                                              />
+                                            </div>
+                                            <div className="absolute right-0 bottom-full mb-1.5 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] font-medium px-2 py-1 rounded shadow-md z-10 w-44 pointer-events-none text-center">
+                                              Pearson linear coefficient. Negative correlations are shown in red.
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-400 block text-right pr-4 font-mono">-</span>
+                                        )}
+                                      </td>
+                                    )}
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
@@ -3055,141 +3304,140 @@ export default function App() {
                           />
                         </div>
 
+                        {/* Multi-select GroupBy Chips — always visible */}
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] font-semibold text-slate-500">Group By Columns</label>
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {groupByColumns.map(col => (
+                              <span key={col} className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-500 border border-indigo-200 dark:border-indigo-900/50 rounded-full flex items-center space-x-1">
+                                <span>{col}</span>
+                                <button 
+                                  type="button" 
+                                  onClick={() => removeGroupByColumn(col)}
+                                  className="hover:text-indigo-700 text-slate-400 font-bold"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                            {groupByColumns.length === 0 && (
+                              <span className="text-[10px] text-slate-400 italic">No columns selected for grouping</span>
+                            )}
+                          </div>
+                          
+                          {/* Searchable Dropdown Selector */}
+                          <div className="relative">
+                            <input
+                              type="text"
+                              placeholder="Search columns to group by..."
+                              value={groupBySearch}
+                              onChange={(e) => setGroupBySearch(e.target.value)}
+                              onFocus={() => setIsGroupByDropdownOpen(true)}
+                              className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                            />
+                            {isGroupByDropdownOpen && (
+                              <>
+                                <div 
+                                  className="fixed inset-0 z-10" 
+                                  onClick={() => setIsGroupByDropdownOpen(false)}
+                                />
+                                <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg z-20 divide-y divide-slate-100 dark:divide-slate-800">
+                                  {dataset?.columnsInfo
+                                    .map(col => col.name)
+                                    .filter(name => !groupByColumns.includes(name) && name.toLowerCase().includes(groupBySearch.toLowerCase()))
+                                    .map(colName => (
+                                      <button
+                                        key={colName}
+                                        type="button"
+                                        onClick={() => {
+                                          setGroupByColumns([...groupByColumns, colName]);
+                                          setGroupBySearch('');
+                                          setIsGroupByDropdownOpen(false);
+                                        }}
+                                        className="w-full text-left px-3 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-250 transition"
+                                      >
+                                        {colName}
+                                      </button>
+                                    ))
+                                  }
+                                  {dataset?.columnsInfo
+                                    .map(col => col.name)
+                                    .filter(name => !groupByColumns.includes(name) && name.toLowerCase().includes(groupBySearch.toLowerCase()))
+                                    .length === 0 && (
+                                      <div className="p-3 text-[10px] text-slate-400 italic text-center">
+                                        No matching columns available
+                                      </div>
+                                    )
+                                  }
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Aggregation Mappings Table — always visible */}
+                        {selectedFeaturesList.filter(colName => !groupByColumns.includes(colName) && colName !== targetColumn).length > 0 && (
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-semibold text-slate-500">Feature Aggregation Mappings</label>
+                            <div className="border border-slate-100 dark:border-slate-800 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+                              <table className="w-full text-[10px] text-left">
+                                <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
+                                  <tr>
+                                    <th className="py-1.5 px-2.5">Feature</th>
+                                    <th className="py-1.5 px-2.5">Method</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
+                                  {selectedFeaturesList.filter(colName => !groupByColumns.includes(colName) && colName !== targetColumn).map(colName => {
+                                    const colMeta = dataset.columnsInfo.find(c => c.name === colName);
+                                    const colType = colMeta ? colMeta.type : 'numeric';
+                                    const method = customAggMappings[colName] || inferAggFunction(colName, colType, dataset);
+                                    return (
+                                      <tr key={colName} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                                        <td className="py-1.5 px-2.5 font-semibold truncate max-w-[120px]">{colName}</td>
+                                        <td className="py-1 px-2">
+                                          <select
+                                            value={method}
+                                            onChange={(e) => setCustomAggMappings({
+                                              ...customAggMappings,
+                                              [colName]: e.target.value
+                                            })}
+                                            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-1.5 py-0.5 text-[10px]"
+                                          >
+                                            {colType === 'numeric' ? (
+                                              <>
+                                                <option value="mean">Mean</option>
+                                                <option value="sum">Sum</option>
+                                                <option value="min">Min</option>
+                                                <option value="max">Max</option>
+                                                <option value="mode">Mode</option>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <option value="mode">Mode</option>
+                                                <option value="count">Count</option>
+                                              </>
+                                            )}
+                                          </select>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Live Pandas code snippet — only when pipeline is on */}
                         {applyAggregation && (
                           <>
-                            {/* Multi-select GroupBy Chips */}
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] font-semibold text-slate-500">Group By Columns</label>
-                              <div className="flex flex-wrap gap-1 mb-2">
-                                {groupByColumns.map(col => (
-                                  <span key={col} className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-500 border border-indigo-200 dark:border-indigo-900/50 rounded-full flex items-center space-x-1">
-                                    <span>{col}</span>
-                                    <button 
-                                      type="button" 
-                                      onClick={() => removeGroupByColumn(col)}
-                                      className="hover:text-indigo-700 text-slate-400 font-bold"
-                                    >
-                                      ×
-                                    </button>
-                                  </span>
-                                ))}
-                                {groupByColumns.length === 0 && (
-                                  <span className="text-[10px] text-slate-400 italic">No columns selected for grouping</span>
-                                )}
-                              </div>
-                              
-                              {/* Searchable Dropdown Selector */}
-                              <div className="relative">
-                                <input
-                                  type="text"
-                                  placeholder="Search columns to group by..."
-                                  value={groupBySearch}
-                                  onChange={(e) => setGroupBySearch(e.target.value)}
-                                  onFocus={() => setIsGroupByDropdownOpen(true)}
-                                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                                />
-                                {isGroupByDropdownOpen && (
-                                  <>
-                                    <div 
-                                      className="fixed inset-0 z-10" 
-                                      onClick={() => setIsGroupByDropdownOpen(false)}
-                                    />
-                                    <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg z-20 divide-y divide-slate-100 dark:divide-slate-800">
-                                      {dataset?.columnsInfo
-                                        .map(col => col.name)
-                                        .filter(name => !groupByColumns.includes(name) && name.toLowerCase().includes(groupBySearch.toLowerCase()))
-                                        .map(colName => (
-                                          <button
-                                            key={colName}
-                                            type="button"
-                                            onClick={() => {
-                                              setGroupByColumns([...groupByColumns, colName]);
-                                              setGroupBySearch('');
-                                              setIsGroupByDropdownOpen(false);
-                                            }}
-                                            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-250 transition"
-                                          >
-                                            {colName}
-                                          </button>
-                                        ))
-                                      }
-                                      {dataset?.columnsInfo
-                                        .map(col => col.name)
-                                        .filter(name => !groupByColumns.includes(name) && name.toLowerCase().includes(groupBySearch.toLowerCase()))
-                                        .length === 0 && (
-                                          <div className="p-3 text-[10px] text-slate-400 italic text-center">
-                                            No matching columns available
-                                          </div>
-                                        )
-                                      }
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Aggregation Mappings Table */}
-                            {selectedFeaturesList.filter(colName => !groupByColumns.includes(colName) && colName !== targetColumn).length > 0 && (
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] font-semibold text-slate-500">Feature Aggregation Mappings</label>
-                                <div className="border border-slate-100 dark:border-slate-800 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
-                                  <table className="w-full text-[10px] text-left">
-                                    <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
-                                      <tr>
-                                        <th className="py-1.5 px-2.5">Feature</th>
-                                        <th className="py-1.5 px-2.5">Method</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
-                                      {selectedFeaturesList.filter(colName => !groupByColumns.includes(colName) && colName !== targetColumn).map(colName => {
-                                        const colMeta = dataset.columnsInfo.find(c => c.name === colName);
-                                        const colType = colMeta ? colMeta.type : 'numeric';
-                                        const method = customAggMappings[colName] || inferAggFunction(colName, colType);
-                                        return (
-                                          <tr key={colName} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
-                                            <td className="py-1.5 px-2.5 font-semibold truncate max-w-[120px]">{colName}</td>
-                                            <td className="py-1 px-2">
-                                              <select
-                                                value={method}
-                                                onChange={(e) => setCustomAggMappings({
-                                                  ...customAggMappings,
-                                                  [colName]: e.target.value
-                                                })}
-                                                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-1.5 py-0.5 text-[10px]"
-                                              >
-                                                {colType === 'numeric' ? (
-                                                  <>
-                                                    <option value="mean">Mean</option>
-                                                    <option value="sum">Sum</option>
-                                                    <option value="min">Min</option>
-                                                    <option value="max">Max</option>
-                                                    <option value="mode">Mode</option>
-                                                  </>
-                                                ) : (
-                                                  <>
-                                                    <option value="mode">Mode</option>
-                                                    <option value="count">Count</option>
-                                                  </>
-                                                )}
-                                              </select>
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Live Pandas Python code snippet preview */}
                             <div className="space-y-1.5">
                               <label className="text-[11px] font-semibold text-slate-500">Pandas Execution Snippet</label>
                               <pre className="font-mono bg-slate-900 text-slate-100 p-2.5 rounded-lg border border-slate-800 text-[10px] overflow-x-auto select-all leading-tight">
                                 {pandasPreviewCode}
                               </pre>
                             </div>
-
                             <div className="text-[10px] text-slate-400 mt-2 font-medium">
                               Estimated output rows: <span className="font-bold text-slate-800 dark:text-slate-200">{estimatedOutputRows} rows</span>
                             </div>
@@ -3207,7 +3455,7 @@ export default function App() {
                     >
                       <div className="flex items-center space-x-2">
                         <Sliders className="w-4 h-4 text-indigo-500" />
-                        <span>1.5 Time Feature Encoding</span>
+                        <span>2. Time Feature Encoding</span>
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.timeEncoding ? '' : 'rotate-180'}`} />
                     </button>
@@ -3215,6 +3463,53 @@ export default function App() {
                     {!collapsedPanels.timeEncoding && (
                       detectedTimeComponents.length > 0 ? (
                         <div className="p-4 space-y-4 animate-slide-up text-xs">
+                          {/* AUTOMATIC TEMPORAL PIPELINE SUMMARY CARD */}
+                          <div className="p-4 bg-indigo-500/5 dark:bg-indigo-500/10 border border-indigo-500/20 dark:border-indigo-500/30 rounded-xl space-y-3 shadow-[0_2px_10px_rgba(99,102,241,0.03)]">
+                            <div className="flex items-center space-x-2.5">
+                              <Brain className="w-4 h-4 text-indigo-500 animate-pulse-slow" />
+                              <h4 className="font-bold text-slate-800 dark:text-slate-100 text-xs">
+                                Smart Temporal Feature Pipeline Engaged
+                              </h4>
+                            </div>
+                            <p className="text-slate-600 dark:text-slate-400 leading-relaxed text-[11px]">
+                              The system detected separate calendar columns (e.g., Year, Month). To preserve time continuity and prevent model bias, the backend automatically performs the following:
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10.5px]">
+                              <div className="flex items-start space-x-2 bg-slate-50 dark:bg-slate-850 p-2 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <Check className="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0" />
+                                <div>
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">Chronological Sort</span>
+                                  <span className="text-slate-400 dark:text-slate-500">Orders dataset by time components to honor chronological splits.</span>
+                                </div>
+                              </div>
+                              <div className="flex items-start space-x-2 bg-slate-50 dark:bg-slate-850 p-2 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <Check className="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0" />
+                                <div>
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">Elapsed Time Index (`elapsed_time`)</span>
+                                  <span className="text-slate-400 dark:text-slate-500">Generates continuous periods from minimum time reference.</span>
+                                </div>
+                              </div>
+                              <div className="flex items-start space-x-2 bg-slate-50 dark:bg-slate-850 p-2 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <Check className="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0" />
+                                <div>
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">Cyclical sin/cos Encodes</span>
+                                  <span className="text-slate-400 dark:text-slate-500">Transforms month/weekday to sin/cos to preserve circular continuity (Dec/Jan adjacency).</span>
+                                </div>
+                              </div>
+                              <div className="flex items-start space-x-2 bg-slate-50 dark:bg-slate-850 p-2 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <Check className="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0" />
+                                <div>
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">Target Lags & Rolling Mean</span>
+                                  <span className="text-slate-400 dark:text-slate-500">Computes shifted lag 1, YoY lag, and rolling statistics dynamically with no leakage.</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-1.5 text-[10px] text-indigo-500/80 font-medium pt-1">
+                              <Info className="w-3.5 h-3.5" />
+                              <span>Model-based evaluation automatically decides whether to use the combined or raw time features.</span>
+                            </div>
+                          </div>
+
                           <div className="border border-slate-100 dark:border-slate-800 rounded-lg overflow-hidden overflow-x-auto">
                             <table className="w-full text-left border-collapse min-w-[500px]">
                               <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 text-[9px] uppercase tracking-wider">
@@ -3233,7 +3528,8 @@ export default function App() {
                                     'day-of-week': 7,
                                     'hour': 24,
                                     'quarter': 4,
-                                    'day of month': 31
+                                    'day of month': 31,
+                                    'week': 52
                                   };
                                   const period = periodMap[comp.componentType];
                                   const isYear = comp.componentType === 'year';
@@ -3317,7 +3613,7 @@ export default function App() {
                     >
                       <div className="flex items-center space-x-2">
                         <CheckSquare className="w-4 h-4 text-indigo-500" />
-                        <span>2. Categorical Encoding</span>
+                        <span>3. Categorical Encoding</span>
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.encoding ? '' : 'rotate-180'}`} />
                     </button>
@@ -3367,7 +3663,7 @@ export default function App() {
                     >
                       <div className="flex items-center space-x-2">
                         <Sliders className="w-4 h-4 text-indigo-500" />
-                        <span>3. Normalisation & Scaling</span>
+                        <span>4. Normalisation & Scaling</span>
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.normalization ? '' : 'rotate-180'}`} />
                     </button>
@@ -3405,7 +3701,7 @@ export default function App() {
                     >
                       <div className="flex items-center space-x-2">
                         <AlertCircle className="w-4 h-4 text-indigo-500" />
-                        <span>4. Missing Value Management</span>
+                        <span>5. Missing Value Management</span>
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.missing ? '' : 'rotate-180'}`} />
                     </button>
@@ -3488,8 +3784,8 @@ export default function App() {
                       className="w-full accent-indigo-500 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-lg cursor-pointer"
                     />
                     <div className="text-[10px] text-slate-400 flex justify-between font-medium">
-                      <span>Train: {Math.round(dataset.rows * (splitRatio / 100))} rows</span>
-                      <span>Test: {Math.round(dataset.rows * (1 - splitRatio / 100))} rows</span>
+                      <span>Train: {Math.round(((applyAggregation && groupByColumns.length > 0) ? estimatedOutputRows : dataset.rows) * (splitRatio / 100))} rows</span>
+                      <span>Test: {Math.round(((applyAggregation && groupByColumns.length > 0) ? estimatedOutputRows : dataset.rows) * (1 - splitRatio / 100))} rows</span>
                     </div>
                   </div>
 
@@ -3588,7 +3884,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Collapsible Model Hyperparameters */}
+                {/* Inline Model Hyperparameters */}
                 <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/60">
                   <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Model-Specific Hyperparameters</span>
                   
@@ -3596,200 +3892,189 @@ export default function App() {
                     const modelMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
                     if (!modelMeta) return null;
                     const params = hyperparameters[modelId] || {};
-                    const isCollapsed = collapsedHypers[modelId];
 
                     return (
                       <div key={modelId} className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden">
-                        <button
-                          onClick={() => setCollapsedHypers({ ...collapsedHypers, [modelId]: !isCollapsed })}
-                          className="w-full flex items-center justify-between p-3.5 bg-slate-50/40 dark:bg-slate-800/30 text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                        >
+                        <div className="w-full flex items-center justify-between p-3.5 bg-slate-50/40 dark:bg-slate-800/30 text-xs font-bold text-slate-800 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800">
                           <div className="flex items-center space-x-2">
                             <Sliders className="w-3.5 h-3.5 text-indigo-500" />
                             <span>{modelMeta.name} Tuning Options</span>
                           </div>
-                          <div className="flex items-center space-x-2 text-[10px] text-slate-400 font-semibold pr-2">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                resetHyperparameters(modelId);
-                              }}
-                              className="hover:underline text-indigo-500"
-                            >
-                              Reset to defaults
-                            </button>
-                            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`} />
-                          </div>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => resetHyperparameters(modelId)}
+                            className="text-[10px] text-indigo-500 hover:underline font-semibold"
+                          >
+                            Reset to defaults
+                          </button>
+                        </div>
 
-                        {!isCollapsed && (
-                          <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white dark:bg-slate-900 animate-slide-up text-xs">
-                            {/* Learning Rate (Optional) */}
-                            {params.learning_rate !== undefined && (
-                              <div className="space-y-1.5 relative group">
-                                <div className="flex items-center space-x-1">
-                                  <label className="font-semibold text-slate-500">Learning Rate</label>
-                                  <HelpCircle className="w-3 h-3 text-slate-400" />
-                                </div>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={params.learning_rate}
-                                  onChange={(e) => setHyperparameters({
-                                    ...hyperparameters,
-                                    [modelId]: { ...params, learning_rate: parseFloat(e.target.value) }
-                                  })}
-                                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
-                                />
-                                <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
-                                  Controls step size during updates. Lower rates avoid overshoot but train slower.
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Estimators / Epochs */}
-                            {params.n_estimators !== undefined && (
-                              <div className="space-y-1.5 relative group">
-                                <div className="flex items-center space-x-1">
-                                  <label className="font-semibold text-slate-500">Estimators Count</label>
-                                  <HelpCircle className="w-3 h-3 text-slate-400" />
-                                </div>
-                                <input
-                                  type="number"
-                                  value={params.n_estimators}
-                                  onChange={(e) => setHyperparameters({
-                                    ...hyperparameters,
-                                    [modelId]: { ...params, n_estimators: parseInt(e.target.value) }
-                                  })}
-                                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
-                                />
-                                <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
-                                  Number of distinct decision trees to build. Higher is more robust but slower.
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Epochs for deep models */}
-                            {params.epochs !== undefined && (
-                              <div className="space-y-1.5 relative group">
-                                <div className="flex items-center space-x-1">
-                                  <label className="font-semibold text-slate-500">Epochs Iterations</label>
-                                  <HelpCircle className="w-3 h-3 text-slate-400" />
-                                </div>
-                                <input
-                                  type="number"
-                                  value={params.epochs}
-                                  onChange={(e) => setHyperparameters({
-                                    ...hyperparameters,
-                                    [modelId]: { ...params, epochs: parseInt(e.target.value) }
-                                  })}
-                                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
-                                />
-                                <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
-                                  Total full passes over the dataset during Neural Network training.
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Max Depth */}
-                            {params.max_depth !== undefined && (
-                              <div className="space-y-1.5 relative group">
-                                <div className="flex items-center space-x-1">
-                                  <label className="font-semibold text-slate-500">Max Tree Depth</label>
-                                  <HelpCircle className="w-3 h-3 text-slate-400" />
-                                </div>
-                                <input
-                                  type="number"
-                                  value={params.max_depth}
-                                  onChange={(e) => setHyperparameters({
-                                    ...hyperparameters,
-                                    [modelId]: { ...params, max_depth: parseInt(e.target.value) }
-                                  })}
-                                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
-                                />
-                                <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
-                                  Maximum levels deep a tree can split. Higher levels capture complexity but overfit.
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Random Seed */}
+                        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white dark:bg-slate-900 text-xs">
+                          {/* Learning Rate (Optional) */}
+                          {params.learning_rate !== undefined && (
                             <div className="space-y-1.5 relative group">
                               <div className="flex items-center space-x-1">
-                                <label className="font-semibold text-slate-500">Random Seed</label>
+                                <label className="font-semibold text-slate-500">Learning Rate</label>
                                 <HelpCircle className="w-3 h-3 text-slate-400" />
                               </div>
                               <input
                                 type="number"
-                                defaultValue="42"
+                                step="0.01"
+                                value={params.learning_rate}
+                                onChange={(e) => setHyperparameters({
+                                  ...hyperparameters,
+                                  [modelId]: { ...params, learning_rate: parseFloat(e.target.value) }
+                                })}
                                 className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
                               />
                               <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
-                                Locks the pseudo-random split sequence for 100% exact result reproduction.
+                                Controls step size during updates. Lower rates avoid overshoot but train slower.
                               </div>
                             </div>
+                          )}
+
+                          {/* Estimators / Epochs */}
+                          {params.n_estimators !== undefined && (
+                            <div className="space-y-1.5 relative group">
+                              <div className="flex items-center space-x-1">
+                                <label className="font-semibold text-slate-500">Estimators Count</label>
+                                <HelpCircle className="w-3 h-3 text-slate-400" />
+                              </div>
+                              <input
+                                type="number"
+                                value={params.n_estimators}
+                                onChange={(e) => setHyperparameters({
+                                  ...hyperparameters,
+                                  [modelId]: { ...params, n_estimators: parseInt(e.target.value) }
+                                })}
+                                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
+                              />
+                              <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
+                                Number of distinct decision trees to build. Higher is more robust but slower.
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Epochs for deep models */}
+                          {params.epochs !== undefined && (
+                            <div className="space-y-1.5 relative group">
+                              <div className="flex items-center space-x-1">
+                                <label className="font-semibold text-slate-500">Epochs Iterations</label>
+                                <HelpCircle className="w-3 h-3 text-slate-400" />
+                              </div>
+                              <input
+                                type="number"
+                                value={params.epochs}
+                                onChange={(e) => setHyperparameters({
+                                  ...hyperparameters,
+                                  [modelId]: { ...params, epochs: parseInt(e.target.value) }
+                                })}
+                                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
+                              />
+                              <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
+                                Total full passes over the dataset during Neural Network training.
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Max Depth */}
+                          {params.max_depth !== undefined && (
+                            <div className="space-y-1.5 relative group">
+                              <div className="flex items-center space-x-1">
+                                <label className="font-semibold text-slate-500">Max Tree Depth</label>
+                                <HelpCircle className="w-3 h-3 text-slate-400" />
+                              </div>
+                              <input
+                                type="number"
+                                value={params.max_depth}
+                                onChange={(e) => setHyperparameters({
+                                  ...hyperparameters,
+                                  [modelId]: { ...params, max_depth: parseInt(e.target.value) }
+                                })}
+                                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
+                              />
+                              <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
+                                Maximum levels deep a tree can split. Higher levels capture complexity but overfit.
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Random Seed */}
+                          <div className="space-y-1.5 relative group">
+                            <div className="flex items-center space-x-1">
+                              <label className="font-semibold text-slate-500">Random Seed</label>
+                              <HelpCircle className="w-3 h-3 text-slate-400" />
+                            </div>
+                            <input
+                              type="number"
+                              defaultValue="42"
+                              className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-1"
+                            />
+                            <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] p-2 rounded shadow-md w-48 z-10">
+                              Locks the pseudo-random split sequence for 100% exact result reproduction.
+                            </div>
                           </div>
-                        )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </section>
 
-              {/* HYPERPARAMETER TUNING SECTION (Optuna) */}
-              <section className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4">
-                <div>
-                  <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-                    <Sliders className="w-5 h-5 text-amber-500" />
-                    <span>Hyperparameter Tuning</span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 uppercase tracking-wider">Optuna</span>
-                  </h2>
-                  <p className="text-slate-500 dark:text-slate-400 text-xs mt-1">
-                    Auto-tune model hyperparameters via Bayesian optimisation. Uses cross-validation inside each trial to find the best settings without data leakage.
-                  </p>
-                </div>
-                <div className="flex flex-col gap-5">
-                  {/* Toggle */}
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Auto-tune with Optuna</span>
-                      <p className="text-[11px] text-slate-400 mt-0.5">Automatically search for optimal hyperparameters before final fitting.</p>
-                    </div>
-                    <button
-                      onClick={() => setUseOptuna(!useOptuna)}
-                      className={`relative w-10 h-5.5 rounded-full transition-colors duration-200 flex items-center ${useOptuna ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700'}`}
-                      style={{ minWidth: 40, height: 22 }}
-                    >
-                      <span className={`absolute w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${useOptuna ? 'translate-x-5' : 'translate-x-1'}`} style={{ top: 3 }} />
-                    </button>
+                {/* Hyperparameter Tuning Section (Optuna) inside the same container */}
+                <div className="space-y-4 pt-4 border-t border-slate-100 dark:border-slate-800/60">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+                      <Sliders className="w-4 h-4 text-amber-500" />
+                      <span>Hyperparameter Auto-Tuning</span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 uppercase tracking-wider">Optuna</span>
+                    </h2>
+                    <p className="text-slate-500 dark:text-slate-400 text-[11px] mt-0.5">
+                      Auto-tune model hyperparameters via Bayesian optimisation. Uses cross-validation inside each trial to find the best settings without data leakage.
+                    </p>
                   </div>
-
-                  {/* Trials Slider */}
-                  {useOptuna && (
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center text-xs font-semibold">
-                        <span className="text-slate-500">NUMBER OF TRIALS</span>
-                        <span className="font-mono text-amber-600 dark:text-amber-400">{optunaTrials} trials</span>
+                  <div className="flex flex-col gap-4">
+                    {/* Toggle */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">Auto-tune with Optuna</span>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Automatically search for optimal hyperparameters before final fitting.</p>
                       </div>
-                      <input
-                        type="range"
-                        min="5"
-                        max="100"
-                        step="5"
-                        value={optunaTrials}
-                        onChange={e => setOptunaTrials(parseInt(e.target.value))}
-                        className="w-full accent-amber-500"
-                      />
-                      <div className="flex justify-between text-[10px] text-slate-400">
-                        <span>5 (fast)</span>
-                        <span className="text-center">25 (recommended)</span>
-                        <span>100 (thorough)</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400">
-                        More trials = better hyperparameters, but longer training time. ~25 trials adds ~30–60s for most datasets.
-                      </p>
+                      <button
+                        onClick={() => setUseOptuna(!useOptuna)}
+                        className={`relative w-10 h-5.5 rounded-full transition-colors duration-200 flex items-center ${useOptuna ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700'}`}
+                        style={{ minWidth: 40, height: 22 }}
+                      >
+                        <span className={`absolute w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${useOptuna ? 'translate-x-5' : 'translate-x-1'}`} style={{ top: 3 }} />
+                      </button>
                     </div>
-                  )}
+
+                    {/* Trials Slider */}
+                    {useOptuna && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center text-xs font-semibold">
+                          <span className="text-slate-500">NUMBER OF TRIALS</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400">{optunaTrials} trials</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="5"
+                          max="100"
+                          step="5"
+                          value={optunaTrials}
+                          onChange={e => setOptunaTrials(parseInt(e.target.value))}
+                          className="w-full accent-amber-500"
+                        />
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                          <span>5 (fast)</span>
+                          <span className="text-center">25 (recommended)</span>
+                          <span>100 (thorough)</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400">
+                          More trials = better hyperparameters, but longer training time. ~25 trials adds ~30–60s for most datasets.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -4039,559 +4324,609 @@ export default function App() {
                       return formattedRow;
                     });
 
+                    const bestModelKey = getBestModelKey(trainingResults);
+                    const bestModelName = MODEL_REGISTRY[goal]?.find(m => m.id === bestModelKey)?.name || bestModelKey;
+
                     return (
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        
-                        {/* Table Pane */}
-                        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
-                          <div className="space-y-4">
-                            <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800/60">
-                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Model Leaderboard</h3>
-                              <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Best values highlighted in green</span>
-                            </div>
-
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-xs text-left">
-                                <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500">
-                                  <tr>
-                                    <th className="py-2.5 px-4">Model Name</th>
-                                    {comparisonCols.map(metric => (
-                                      <th key={metric} className="py-2.5 px-4 text-right">{metric}</th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                                  {trainingResults.comparison.map((row, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
-                                      <td className="py-2.5 px-4 font-bold text-slate-800 dark:text-slate-100">{row.modelName}</td>
-                                      {Object.entries(row).filter(([k]) => k !== 'modelName').map(([metric, value]) => {
-                                        const best = isBestMetric(metric, value, trainingResults.comparison);
-                                        return (
-                                          <td 
-                                            key={metric} 
-                                            className={`py-2.5 px-4 text-right font-mono font-bold ${best ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-655 dark:text-slate-400'}`}
-                                          >
-                                            {value}
-                                          </td>
-                                        );
-                                      })}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                      <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-all duration-200">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedLeaderboard(!expandedLeaderboard)}
+                          className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition border-none text-left"
+                        >
+                          <div className="flex items-center space-x-3">
+                            <Award className="w-5 h-5 text-indigo-500" />
+                            <div>
+                              <span className="font-bold text-sm text-slate-800 dark:text-slate-100 block">Model Leaderboard & Metric Comparison</span>
+                              <span className="text-[10px] text-slate-400 font-medium font-sans">Compare accuracy parameters across all trained candidates</span>
                             </div>
                           </div>
-                        </div>
+                          <div className="flex items-center space-x-3">
+                            {bestModelName && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                                Best: {bestModelName}
+                              </span>
+                            )}
+                            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expandedLeaderboard ? 'rotate-180' : ''}`} />
+                          </div>
+                        </button>
 
-                        {/* Chart Pane */}
-                        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
-                          <div className="space-y-4">
-                            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800/60">
-                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Accuracy & Metric Visual Comparison</h3>
+                        {expandedLeaderboard && (
+                          <div className="px-6 pb-6 pt-4 border-t border-slate-100 dark:border-slate-800/60 space-y-6">
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                               
-                              {/* Pill Tabs to select metric */}
-                              <div className="flex flex-wrap gap-1">
-                                {comparisonCols.map(metric => (
-                                  <button
-                                    key={metric}
-                                    type="button"
-                                    onClick={() => setActiveMetricChart(metric)}
-                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition border ${
-                                      selectedMetric === metric
-                                        ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
-                                        : 'bg-slate-50 dark:bg-slate-800/40 text-slate-500 border-transparent hover:bg-slate-100 dark:hover:bg-slate-805'
-                                    }`}
-                                  >
-                                    {metric}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                              {/* Table Pane */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
+                                <div className="space-y-4">
+                                  <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800/60">
+                                    <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Model Leaderboard</h3>
+                                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Best values highlighted in green</span>
+                                  </div>
 
-                            {/* Chart Container */}
-                            <div className="w-full h-[220px] pt-4">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.15} />
-                                  <XAxis 
-                                    dataKey="name" 
-                                    stroke="var(--text-muted)" 
-                                    fontSize={10} 
-                                    tickLine={false} 
-                                    axisLine={false}
-                                    tickFormatter={(tick) => {
-                                      // Shorten model name for chart layout
-                                      return String(tick)
-                                        .replace('Regression', 'Reg')
-                                        .replace('Classification', 'Clf')
-                                        .replace('Classifier', 'Clf')
-                                        .replace('Gradient Boosting', 'GBM')
-                                        .replace('Random Forest', 'RF');
-                                    }}
-                                  />
-                                  <YAxis 
-                                    stroke="var(--text-muted)" 
-                                    fontSize={10} 
-                                    tickLine={false} 
-                                    axisLine={false}
-                                  />
-                                  <ChartTooltip 
-                                    contentStyle={{ 
-                                      background: 'var(--bg-raised)', 
-                                      border: '1px solid var(--border)', 
-                                      borderRadius: '10px', 
-                                      fontSize: '11px',
-                                      color: 'var(--text-primary)'
-                                    }}
-                                    labelClassName="font-bold text-slate-750 dark:text-slate-200"
-                                  />
-                                  <Bar 
-                                    dataKey={selectedMetric} 
-                                    fill="#6366f1" 
-                                    radius={[6, 6, 0, 0]} 
-                                    maxBarSize={40}
-                                  />
-                                </BarChart>
-                              </ResponsiveContainer>
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-xs text-left">
+                                      <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500">
+                                        <tr>
+                                          <th className="py-2.5 px-4">Model Name</th>
+                                          {comparisonCols.map(metric => (
+                                            <th key={metric} className="py-2.5 px-4 text-right">{metric}</th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                                        {trainingResults.comparison.map((row, idx) => (
+                                          <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
+                                            <td className="py-2.5 px-4 font-bold text-slate-800 dark:text-slate-100">{row.modelName}</td>
+                                            {Object.entries(row).filter(([k]) => k !== 'modelName').map(([metric, value]) => {
+                                              const best = isBestMetric(metric, value, trainingResults.comparison);
+                                              return (
+                                                <td 
+                                                  key={metric} 
+                                                  className={`py-2.5 px-4 text-right font-mono font-bold ${best ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-655 dark:text-slate-400'}`}
+                                                >
+                                                  {value}
+                                                </td>
+                                              );
+                                            })}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Chart Pane */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
+                                <div className="space-y-4">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800/60">
+                                    <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Accuracy & Metric Visual Comparison</h3>
+                                    
+                                    {/* Pill Tabs to select metric */}
+                                    <div className="flex flex-wrap gap-1">
+                                      {comparisonCols.map(metric => (
+                                        <button
+                                          key={metric}
+                                          type="button"
+                                          onClick={() => setActiveMetricChart(metric)}
+                                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition border ${
+                                            selectedMetric === metric
+                                              ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                              : 'bg-slate-50 dark:bg-slate-800/40 text-slate-500 border-transparent hover:bg-slate-100 dark:hover:bg-slate-805'
+                                          }`}
+                                        >
+                                          {metric}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {/* Chart Container */}
+                                  <div className="w-full h-[220px] pt-4">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.15} />
+                                        <XAxis 
+                                          dataKey="name" 
+                                          stroke="var(--text-muted)" 
+                                          fontSize={10} 
+                                          tickLine={false} 
+                                          axisLine={false}
+                                          tickFormatter={(tick) => {
+                                            return String(tick)
+                                              .replace('Regression', 'Reg')
+                                              .replace('Classification', 'Clf')
+                                              .replace('Classifier', 'Clf')
+                                              .replace('Gradient Boosting', 'GBM')
+                                              .replace('Random Forest', 'RF');
+                                          }}
+                                        />
+                                        <YAxis 
+                                          stroke="var(--text-muted)" 
+                                          fontSize={10} 
+                                          tickLine={false} 
+                                          axisLine={false}
+                                        />
+                                        <ChartTooltip 
+                                          contentStyle={{ 
+                                            background: 'var(--bg-raised)', 
+                                            border: '1px solid var(--border)', 
+                                            borderRadius: '10px', 
+                                            fontSize: '11px',
+                                            color: 'var(--text-primary)'
+                                          }}
+                                          labelClassName="font-bold text-slate-750 dark:text-slate-200"
+                                        />
+                                        <Bar 
+                                          dataKey={selectedMetric} 
+                                          fill="#6366f1" 
+                                          radius={[6, 6, 0, 0]} 
+                                          maxBarSize={40}
+                                        />
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                </div>
+                              </div>
+
                             </div>
                           </div>
-                        </div>
-
+                        )}
                       </div>
                     );
                   })()}
 
-                  {/* Collapsible result cards for each model */}
-                  {advancedMode && (
-                    <div className="space-y-4">
-                      {selectedModels.map(modelId => {
-                        const result = trainingResults.models[modelId];
-                        if (!result) return null;
-                        const isExpanded = expandedTrainedModels[modelId];
-                        const isNonEpoch = nonEpochModels.includes(modelId);
-                        const modelResiduals = getResidualStats(result.predictions || []);
+                  {/* Model Diagnostics Card with dropdown selection */}
+                  {advancedMode && selectedModels.length > 0 && (() => {
+                    const currentDiagModel = activeDiagModel || selectedModels[0] || '';
+                    const result = trainingResults.models[currentDiagModel];
+                    if (!result) return null;
+                    const isNonEpoch = nonEpochModels.includes(currentDiagModel);
+                    const modelResiduals = getResidualStats(result.predictions || []);
 
-                        return (
-                          <div key={modelId} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition">
-                            
-                            {/* Header banner summary */}
-                            <div 
-                              onClick={() => setExpandedTrainedModels({ ...expandedTrainedModels, [modelId]: !isExpanded })}
-                              className="w-full flex items-center justify-between p-5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition cursor-pointer select-none border-b border-slate-50 dark:border-slate-855"
+                    return (
+                      <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition p-6 space-y-6">
+                        
+                        {/* Selector Header Bar */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800/60">
+                          <div className="flex items-center space-x-3">
+                            <span className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center font-bold text-xs uppercase shadow-inner">
+                              {currentDiagModel.slice(0, 2)}
+                            </span>
+                            <div>
+                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Model Diagnostics</h3>
+                              <span className="text-[10px] text-slate-400 font-medium">Select a model from the dropdown to view its detailed curves and charts</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center space-x-3 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 shrink-0 w-fit">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Model:</label>
+                            <select
+                              value={currentDiagModel}
+                              onChange={(e) => setActiveDiagModel(e.target.value)}
+                              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-0.5 text-xs font-semibold focus:outline-none text-slate-700 dark:text-slate-300 font-sans"
                             >
-                              <div className="flex items-center space-x-3">
-                                <span className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center font-bold text-xs uppercase shadow-inner">
-                                  {modelId.slice(0, 2)}
-                                </span>
-                                <div>
-                                  <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">{result.name}</h3>
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-500 inline-block mt-0.5">
-                                    {result.overallScoreBadge}
-                                  </span>
-                                </div>
-                              </div>
-                              
-                              <div className="flex items-center space-x-2">
-                                <span className="text-xs text-slate-400 font-semibold">{isExpanded ? 'Collapse' : 'Expand Diagnostics'}</span>
-                                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                              {selectedModels.map(modelId => {
+                                const mMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
+                                return (
+                                  <option key={modelId} value={modelId}>
+                                    {mMeta ? mMeta.name : modelId} {modelId === getBestModelKey(trainingResults) ? '(Best)' : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Diagnostics Body */}
+                        <div className="space-y-6 pt-2">
+                          
+                          {/* 3-Column Sub-Grid */}
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                            
+                            {/* Col 1: Metrics List Table */}
+                            <div className="space-y-2">
+                              <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Evaluation Metrics</span>
+                              <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold">
+                                    <tr>
+                                      <th className="py-2 px-3 text-slate-500 text-left">Metric</th>
+                                      <th className="py-2 px-3 text-right text-slate-500">Value</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                                    {Object.entries(result.metrics).map(([key, val]) => (
+                                      <tr key={key} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                                        <td className="py-2 px-3 font-semibold text-slate-600 dark:text-slate-300">{key}</td>
+                                        <td className="py-2 px-3 text-right font-mono font-bold text-indigo-500">{val}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
 
-                            {/* Diagnostics Body */}
-                            {isExpanded && (
-                              <div className="p-6 space-y-6 animate-fade-in">
-                                
-                                {/* 3-Column Sub-Grid */}
-                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                                  
-                                  {/* Col 1: Metrics List Table */}
-                                  <div className="space-y-2">
-                                    <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Evaluation Metrics</span>
-                                    <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden">
-                                      <table className="w-full text-xs">
-                                        <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold">
-                                          <tr>
-                                            <th className="py-2 px-3 text-slate-500 text-left">Metric</th>
-                                            <th className="py-2 px-3 text-right text-slate-500">Value</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                                          {Object.entries(result.metrics).map(([key, val]) => (
-                                            <tr key={key} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
-                                              <td className="py-2 px-3 font-semibold text-slate-600 dark:text-slate-300">{key}</td>
-                                              <td className="py-2 px-3 text-right font-mono font-bold text-indigo-500">{val}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
-
-                                  {/* Col 2: Feature Importance Bar Chart */}
-                                  <div className="space-y-2">
-                                    <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Feature Importance (%)</span>
-                                    <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-3 flex items-center justify-center bg-slate-50/20 dark:bg-slate-900/30">
-                                      <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart
-                                          data={result.featureImportances}
-                                          layout="vertical"
-                                          margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
-                                        >
-                                          <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
-                                          <XAxis type="number" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
-                                          <YAxis dataKey="name" type="category" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} width={70} />
-                                          <ChartTooltip 
-                                            contentStyle={{ 
-                                              backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
-                                              borderColor: darkMode ? '#334155' : '#e2e8f0',
-                                              color: darkMode ? '#f1f5f9' : '#1e293b',
-                                              fontSize: 10
-                                            }} 
-                                          />
-                                          <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
-                                        </BarChart>
-                                      </ResponsiveContainer>
-                                    </div>
-                                  </div>
-
-                                  {/* Col 3: Epoch/Loss Chart or Non-Epoch Placeholder */}
-                                  <div className="space-y-2">
-                                    <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Loss History / Method Info</span>
-                                    {!isNonEpoch ? (
-                                      <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-3 flex items-center justify-center bg-slate-50/20 dark:bg-slate-900/30">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                          <LineChart
-                                            data={result.lossCurve}
-                                            margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
-                                          >
-                                            <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
-                                            <XAxis dataKey="epoch" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
-                                            <YAxis stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
-                                            <ChartTooltip 
-                                              contentStyle={{ 
-                                                backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
-                                                borderColor: darkMode ? '#334155' : '#e2e8f0',
-                                                color: darkMode ? '#f1f5f9' : '#1e293b',
-                                                fontSize: 10
-                                              }} 
-                                            />
-                                            <Legend wrapperStyle={{ fontSize: 10 }} />
-                                            <Line type="monotone" dataKey="trainLoss" name="Train Loss" stroke="#6366f1" strokeWidth={2} activeDot={{ r: 5 }} dot={false} />
-                                            <Line type="monotone" dataKey="valLoss" name="Val Loss" stroke="#f97316" strokeWidth={2} dot={false} />
-                                          </LineChart>
-                                        </ResponsiveContainer>
-                                      </div>
-                                    ) : (
-                                      <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-5 flex flex-col items-center justify-center text-center bg-slate-50/20 dark:bg-slate-900/30 space-y-2 select-none">
-                                        <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-400 dark:text-slate-505">
-                                          <Sliders className="w-6 h-6" />
-                                        </div>
-                                        <span className="font-semibold text-xs text-slate-700 dark:text-slate-300">Iterative Loss History Unreported</span>
-                                        <p className="text-[10px] text-slate-400 dark:text-slate-505 max-w-[200px] leading-tight">
-                                          {result.name} is a non-epoch-based algorithm fitting weights directly without gradient step optimization history.
-                                        </p>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                </div>
-
-                                {/* Additional Diagnostics: Confusion Matrix or Residuals */}
-                                {goal === 'classification' && result.confusionMatrix && (
-                                  <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/40">
-                                    <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Confusion Matrix Diagnostics</span>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-xs">
-                                      <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase">True Positive (TP)</span>
-                                        <span className="font-mono text-lg font-bold text-indigo-500 mt-1">{result.confusionMatrix.tp}</span>
-                                      </div>
-                                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase">False Positive (FP)</span>
-                                        <span className="font-mono text-lg font-bold mt-1 text-rose-505">{result.confusionMatrix.fp}</span>
-                                      </div>
-                                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase">False Negative (FN)</span>
-                                        <span className="font-mono text-lg font-bold mt-1 text-rose-505">{result.confusionMatrix.fn}</span>
-                                      </div>
-                                      <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase">True Negative (TN)</span>
-                                        <span className="font-mono text-lg font-bold text-indigo-500 mt-1">{result.confusionMatrix.tn}</span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {(goal === 'regression' || goal === 'forecasting') && (
-                                  <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/40">
-                                    <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Residual Diagnostics (Error Distribution)</span>
-                                    <div className="border border-slate-150 dark:border-slate-800 rounded-xl overflow-hidden">
-                                      <table className="w-full text-xs text-left">
-                                        <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
-                                          <tr>
-                                            <th className="py-2 px-4">Min Residual</th>
-                                            <th className="py-2 px-4">25% Percentile (Q1)</th>
-                                            <th className="py-2 px-4">Median Residual</th>
-                                            <th className="py-2 px-4">75% Percentile (Q3)</th>
-                                            <th className="py-2 px-4">Max Residual</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                                          <tr>
-                                            <td className="py-2.5 px-4 font-mono">{modelResiduals.min.toFixed(2)}</td>
-                                            <td className="py-2.5 px-4 font-mono">{modelResiduals.q1.toFixed(2)}</td>
-                                            <td className="py-2.5 px-4 font-mono text-indigo-500 font-bold">{modelResiduals.median.toFixed(2)}</td>
-                                            <td className="py-2.5 px-4 font-mono">{modelResiduals.q3.toFixed(2)}</td>
-                                            <td className="py-2.5 px-4 font-mono">{modelResiduals.max.toFixed(2)}</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
-                                )}
-
+                            {/* Col 2: Feature Importance Bar Chart */}
+                            <div className="space-y-2">
+                              <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Feature Importance (%)</span>
+                              <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-3 flex items-center justify-center bg-slate-50/20 dark:bg-slate-900/30">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <BarChart
+                                    data={result.featureImportances}
+                                    layout="vertical"
+                                    margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                                    <XAxis type="number" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
+                                    <YAxis dataKey="name" type="category" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} width={70} />
+                                    <ChartTooltip 
+                                      contentStyle={{ 
+                                        backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
+                                        borderColor: darkMode ? '#334155' : '#e2e8f0',
+                                        color: darkMode ? '#f1f5f9' : '#1e293b',
+                                        fontSize: 10
+                                      }} 
+                                    />
+                                    <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                                  </BarChart>
+                                </ResponsiveContainer>
                               </div>
-                            )}
+                            </div>
+
+                            {/* Col 3: Epoch/Loss Chart or Non-Epoch Placeholder */}
+                            <div className="space-y-2">
+                              <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Loss History / Method Info</span>
+                              {!isNonEpoch ? (
+                                <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-3 flex items-center justify-center bg-slate-50/20 dark:bg-slate-900/30">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart
+                                      data={result.lossCurve}
+                                      margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
+                                    >
+                                      <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                                      <XAxis dataKey="epoch" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
+                                      <YAxis stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
+                                      <ChartTooltip 
+                                        contentStyle={{ 
+                                          backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
+                                          borderColor: darkMode ? '#334155' : '#e2e8f0',
+                                          color: darkMode ? '#f1f5f9' : '#1e293b',
+                                          fontSize: 10
+                                        }} 
+                                      />
+                                      <Legend wrapperStyle={{ fontSize: 10 }} />
+                                      <Line type="monotone" dataKey="trainLoss" name="Train Loss" stroke="#6366f1" strokeWidth={2} activeDot={{ r: 5 }} dot={false} />
+                                      <Line type="monotone" dataKey="valLoss" name="Val Loss" stroke="#f97316" strokeWidth={2} dot={false} />
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              ) : (
+                                <div className="h-60 border border-slate-100 dark:border-slate-800 rounded-xl p-5 flex flex-col items-center justify-center text-center bg-slate-50/20 dark:bg-slate-900/30 space-y-2 select-none">
+                                  <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-400 dark:text-slate-505">
+                                    <Sliders className="w-6 h-6" />
+                                  </div>
+                                  <span className="font-semibold text-xs text-slate-700 dark:text-slate-300">Iterative Loss History Unreported</span>
+                                  <p className="text-[10px] text-slate-400 dark:text-slate-505 max-w-[200px] leading-tight">
+                                    {result.name} is a non-epoch-based algorithm fitting weights directly without gradient step optimization history.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+
+                          {/* Additional Diagnostics: Confusion Matrix or Residuals */}
+                          {goal === 'classification' && result.confusionMatrix && (
+                            <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/40">
+                              <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Confusion Matrix Diagnostics</span>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-xs">
+                                <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col justify-center">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">True Positive (TP)</span>
+                                  <span className="font-mono text-lg font-bold text-indigo-500 mt-1">{result.confusionMatrix.tp}</span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex flex-col justify-center">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">False Positive (FP)</span>
+                                  <span className="font-mono text-lg font-bold mt-1 text-rose-505">{result.confusionMatrix.fp}</span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex flex-col justify-center">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">False Negative (FN)</span>
+                                  <span className="font-mono text-lg font-bold mt-1 text-rose-505">{result.confusionMatrix.fn}</span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col justify-center">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">True Negative (TN)</span>
+                                  <span className="font-mono text-lg font-bold text-indigo-500 mt-1">{result.confusionMatrix.tn}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {(goal === 'regression' || goal === 'forecasting') && (
+                            <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/40">
+                              <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Residual Diagnostics (Error Distribution)</span>
+                              <div className="border border-slate-150 dark:border-slate-800 rounded-xl overflow-hidden">
+                                <table className="w-full text-xs text-left">
+                                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
+                                    <tr>
+                                      <th className="py-2 px-4">Min Residual</th>
+                                      <th className="py-2 px-4">25% Percentile (Q1)</th>
+                                      <th className="py-2 px-4">Median Residual</th>
+                                      <th className="py-2 px-4">75% Percentile (Q3)</th>
+                                      <th className="py-2 px-4">Max Residual</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                                    <tr>
+                                      <td className="py-2.5 px-4 font-mono">{modelResiduals.min.toFixed(2)}</td>
+                                      <td className="py-2.5 px-4 font-mono">{modelResiduals.q1.toFixed(2)}</td>
+                                      <td className="py-2.5 px-4 font-mono text-indigo-500 font-bold">{modelResiduals.median.toFixed(2)}</td>
+                                      <td className="py-2.5 px-4 font-mono">{modelResiduals.q3.toFixed(2)}</td>
+                                      <td className="py-2.5 px-4 font-mono">{modelResiduals.max.toFixed(2)}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </section>
 
-                {/* SECTION B — MODEL OUTPUT */}
-                <section className="space-y-6 pb-20">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-                        <Download className="w-5 h-5 text-indigo-500" />
-                        <span>Section B — Predictions Preview</span>
-                      </h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                        Preview validation predictions and paginate through test set results{!advancedMode && ` for the chosen ${MODEL_REGISTRY[goal]?.find(m => m.id === activePredictionModel)?.name || 'model'}`}.
-                      </p>
+                {/* Predictions Preview */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-all duration-200">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedPredictionsPreview(!expandedPredictionsPreview)}
+                    className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition border-none text-left"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Download className="w-5 h-5 text-indigo-500" />
+                      <div>
+                        <span className="font-bold text-sm text-slate-800 dark:text-slate-100 block">Predictions Preview</span>
+                        <span className="text-[10px] text-slate-400 font-medium font-sans">
+                          Preview validation predictions and paginate through test set results{!advancedMode && ` for the chosen ${MODEL_REGISTRY[goal]?.find(m => m.id === activePredictionModel)?.name || 'model'}`}
+                        </span>
+                      </div>
                     </div>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                        {totalPreds} rows
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expandedPredictionsPreview ? 'rotate-180' : ''}`} />
+                    </div>
+                  </button>
 
-                    {advancedMode && selectedModels.length > 1 && (
-                      <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3.5 py-2 rounded-xl border border-slate-100 dark:border-slate-800 shrink-0">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Prediction Model:</label>
-                        <select
-                          value={activePredictionModel}
-                          onChange={(e) => setActivePredictionModel(e.target.value)}
-                          className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-lg px-2.5 py-1 text-xs font-semibold focus:outline-none text-slate-700 dark:text-slate-300 font-sans"
-                        >
-                          {selectedModels.map(modelId => {
-                            const mMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
-                            return (
-                              <option key={modelId} value={modelId}>
-                                {mMeta ? mMeta.name : modelId} {modelId === getBestModelKey(trainingResults) ? '(Best)' : ''}
-                              </option>
-                            );
-                          })}
-                        </select>
+                  {expandedPredictionsPreview && (
+                    <div className="px-6 pb-6 pt-4 border-t border-slate-100 dark:border-slate-800/60 space-y-4">
+                      {advancedMode && selectedModels.length > 1 && (
+                        <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3.5 py-2 rounded-xl border border-slate-100 dark:border-slate-800 shrink-0 w-fit">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Prediction Model:</label>
+                          <select
+                            value={activePredictionModel}
+                            onChange={(e) => setActivePredictionModel(e.target.value)}
+                            className="bg-white dark:bg-slate-900 border border-slate-155 dark:border-slate-800 rounded-lg px-2.5 py-1 text-xs font-semibold focus:outline-none text-slate-700 dark:text-slate-300 font-sans"
+                          >
+                            {selectedModels.map(modelId => {
+                              const mMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
+                              return (
+                                <option key={modelId} value={modelId}>
+                                  {mMeta ? mMeta.name : modelId} {modelId === getBestModelKey(trainingResults) ? '(Best)' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="max-h-[300px] overflow-y-auto border border-slate-50 dark:border-slate-800/80 rounded-xl scrollbar-thin">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-50 dark:bg-slate-850 font-bold sticky top-0 z-10 text-slate-500 uppercase tracking-wider text-[9px]">
+                            <tr>
+                              <th className="py-2 px-3">Row</th>
+                              <th className="py-2 px-3">Actual</th>
+                              <th className="py-2 px-3">Predicted</th>
+                              <th className="py-2 px-3 text-right">Error / Correct</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40 text-[11px]">
+                            {paginatedPredictions.map(pred => {
+                              const isErr = pred.correct === '✗';
+                              return (
+                                <tr key={pred.rowNum} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
+                                  <td className="py-1 px-3 text-slate-400 font-mono">#{pred.rowNum}</td>
+                                  <td className="py-1 px-3 font-semibold">{pred.actual}</td>
+                                  <td className="py-1 px-3 font-semibold text-indigo-500">{pred.predicted}</td>
+                                  <td className={`py-1 px-3 text-right font-bold font-mono ${isErr ? 'text-rose-500' : goal === 'classification' ? 'text-emerald-500' : 'text-slate-600 dark:text-slate-400'}`}>
+                                    {goal === 'classification' ? pred.correct : `± ${pred.error}`}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex justify-between items-center text-xs mt-3 select-none">
+                        <span className="text-slate-400 font-semibold">
+                          Showing {startPredIdx + 1} - {Math.min(totalPreds, startPredIdx + predictionsPerPage)} of {totalPreds} test predictions
+                        </span>
+                        
+                        <div className="flex space-x-1.5 font-bold">
+                          <button
+                            type="button"
+                            onClick={() => setPredictionsPage(prev => Math.max(0, prev - 1))}
+                            disabled={predictionsPage === 0}
+                            className={`px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg transition ${predictionsPage === 0 ? 'opacity-40 cursor-not-allowed text-slate-400' : 'hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPredictionsPage(prev => Math.min(totalPages - 1, prev + 1))}
+                            disabled={predictionsPage === totalPages - 1}
+                            className={`px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg transition ${predictionsPage === totalPages - 1 ? 'opacity-40 cursor-not-allowed text-slate-400' : 'hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Forecast Projections */}
+                {goal === 'forecasting' && (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-all duration-200">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedForecastProjections(!expandedForecastProjections)}
+                      className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition border-none text-left"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <LineChartIcon className="w-5 h-5 text-indigo-500" />
+                        <div>
+                          <span className="font-bold text-sm text-slate-800 dark:text-slate-100 block">Forecast Projections</span>
+                          <span className="text-[10px] text-slate-400 font-medium font-sans">
+                            Visualize extrapolated future values and confidence bands
+                          </span>
+                        </div>
+                      </div>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expandedForecastProjections ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {expandedForecastProjections && (
+                      <div className="px-6 pb-6 pt-4 border-t border-slate-100 dark:border-slate-800/60 space-y-6">
+                        {/* Controls Row */}
+                        <div className="flex flex-wrap gap-4 items-center">
+                          <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                            <label className="text-xs font-semibold text-slate-500">Forecast Horizon</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="60"
+                              value={forecastHorizon}
+                              onChange={(e) => setForecastHorizon(Math.max(1, Math.min(60, Number(e.target.value))))}
+                              className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-0.5 w-16 text-center font-bold text-xs focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                            <label className="text-xs font-semibold text-slate-500">Frequency</label>
+                            <select
+                              value={forecastFrequency}
+                              onChange={(e) => setForecastFrequency(e.target.value)}
+                              className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none"
+                            >
+                              <option value="Daily">Daily</option>
+                              <option value="Weekly">Weekly</option>
+                              <option value="Monthly">Monthly</option>
+                              <option value="Quarterly">Quarterly</option>
+                              <option value="Yearly">Yearly</option>
+                            </select>
+                          </div>
+
+                          <button
+                            onClick={() => setTriggerForecastUpdate(prev => prev + 1)}
+                            className="text-xs font-semibold px-3 py-1.5 border border-indigo-500/20 bg-indigo-500/5 hover:bg-indigo-500/10 text-indigo-500 rounded-lg transition"
+                          >
+                            Regenerate Forecast
+                          </button>
+                        </div>
+
+                        {/* Composed Chart */}
+                        <div className="h-80 w-full">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart
+                              data={forecastData}
+                              margin={{ top: 20, right: 20, bottom: 20, left: 20 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                              <XAxis dataKey="period" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 10 }} />
+                              <YAxis stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 10 }} />
+                              <ChartTooltip
+                                contentStyle={{
+                                  backgroundColor: darkMode ? '#1e293b' : '#ffffff',
+                                  borderColor: darkMode ? '#334155' : '#e2e8f0',
+                                  color: darkMode ? '#f1f5f9' : '#1e293b',
+                                  fontSize: 11
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 11 }} />
+                              
+                              {/* Confidence Band Area */}
+                              <Area
+                                type="monotone"
+                                dataKey="range"
+                                name="90% Confidence Interval"
+                                fill="#f59e0b"
+                                stroke="none"
+                                fillOpacity={0.15}
+                                connectNulls={true}
+                              />
+                              
+                              {/* Actual Line */}
+                              <Line
+                                type="monotone"
+                                dataKey="actual"
+                                name="Historical Actuals"
+                                stroke="#6366f1"
+                                strokeWidth={2}
+                                dot={false}
+                                connectNulls={true}
+                              />
+                              
+                              {/* Forecast Line */}
+                              <Line
+                                type="monotone"
+                                dataKey="forecast"
+                                name="Future Forecast"
+                                stroke="#f59e0b"
+                                strokeDasharray="5 5"
+                                strokeWidth={2}
+                                dot={false}
+                                connectNulls={true}
+                              />
+
+                              {/* Reference line for start of forecast */}
+                              {(() => {
+                                const lastHist = forecastData.filter(d => d.actual !== null);
+                                const xVal = lastHist.length > 0 ? lastHist[lastHist.length - 1].period : '';
+                                if (!xVal) return null;
+                                return (
+                                  <ReferenceLine
+                                    x={xVal}
+                                    stroke={darkMode ? '#64748b' : '#94a3b8'}
+                                    strokeDasharray="3 3"
+                                    label={{
+                                      value: 'Forecast Start',
+                                      position: 'top',
+                                      fill: darkMode ? '#94a3b8' : '#64748b',
+                                      fontSize: 9,
+                                      fontWeight: 'bold'
+                                    }}
+                                  />
+                                );
+                              })()}
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
                       </div>
                     )}
                   </div>
-
-                  {/* Predictions preview Table */}
-                  <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-                    <div className="max-h-[300px] overflow-y-auto border border-slate-50 dark:border-slate-800/80 rounded-xl scrollbar-thin">
-                      <table className="w-full text-xs text-left">
-                        <thead className="bg-slate-50 dark:bg-slate-850 font-bold sticky top-0 z-10 text-slate-500 uppercase tracking-wider text-[9px]">
-                          <tr>
-                            <th className="py-2 px-3">Row</th>
-                            <th className="py-2 px-3">Actual</th>
-                            <th className="py-2 px-3">Predicted</th>
-                            <th className="py-2 px-3 text-right">Error / Correct</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40 text-[11px]">
-                          {paginatedPredictions.map(pred => {
-                            const isErr = pred.correct === '✗';
-                            return (
-                              <tr key={pred.rowNum} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
-                                <td className="py-1 px-3 text-slate-400 font-mono">#{pred.rowNum}</td>
-                                <td className="py-1 px-3 font-semibold">{pred.actual}</td>
-                                <td className="py-1 px-3 font-semibold text-indigo-500">{pred.predicted}</td>
-                                <td className={`py-1 px-3 text-right font-bold font-mono ${isErr ? 'text-rose-500' : goal === 'classification' ? 'text-emerald-500' : 'text-slate-600 dark:text-slate-400'}`}>
-                                  {goal === 'classification' ? pred.correct : `± ${pred.error}`}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Pagination Controls */}
-                    <div className="flex justify-between items-center text-xs mt-3 select-none">
-                      <span className="text-slate-400 font-semibold">
-                        Showing {startPredIdx + 1} - {Math.min(totalPreds, startPredIdx + predictionsPerPage)} of {totalPreds} test predictions
-                      </span>
-                      
-                      <div className="flex space-x-1.5 font-bold">
-                        <button
-                          type="button"
-                          onClick={() => setPredictionsPage(prev => Math.max(0, prev - 1))}
-                          disabled={predictionsPage === 0}
-                          className={`px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg transition ${predictionsPage === 0 ? 'opacity-40 cursor-not-allowed text-slate-400' : 'hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
-                        >
-                          Prev
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPredictionsPage(prev => Math.min(totalPages - 1, prev + 1))}
-                          disabled={predictionsPage === totalPages - 1}
-                          className={`px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg transition ${predictionsPage === totalPages - 1 ? 'opacity-40 cursor-not-allowed text-slate-400' : 'hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </div>
-
-                  </div>
-                </section>
-
-                {/* SECTION B.5 — FORECAST PROJECTIONS VISUALIZER */}
-                {goal === 'forecasting' && (
-                  <section className="space-y-6">
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-                        <LineChartIcon className="w-5 h-5 text-indigo-500" />
-                        <span>Section B.5 — Forecast Projections</span>
-                      </h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                        Visualize extrapolated future values and confidence bands.
-                      </p>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-6 shadow-sm">
-                      {/* Controls Row */}
-                      <div className="flex flex-wrap gap-4 items-center">
-                        <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
-                          <label className="text-xs font-semibold text-slate-500">Forecast Horizon</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="60"
-                            value={forecastHorizon}
-                            onChange={(e) => setForecastHorizon(Math.max(1, Math.min(60, Number(e.target.value))))}
-                            className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-0.5 w-16 text-center font-bold text-xs focus:outline-none"
-                          />
-                        </div>
-
-                        <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
-                          <label className="text-xs font-semibold text-slate-500">Frequency</label>
-                          <select
-                            value={forecastFrequency}
-                            onChange={(e) => setForecastFrequency(e.target.value)}
-                            className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none"
-                          >
-                            <option value="Daily">Daily</option>
-                            <option value="Weekly">Weekly</option>
-                            <option value="Monthly">Monthly</option>
-                            <option value="Quarterly">Quarterly</option>
-                            <option value="Yearly">Yearly</option>
-                          </select>
-                        </div>
-
-                        <button
-                          onClick={() => setTriggerForecastUpdate(prev => prev + 1)}
-                          className="text-xs font-semibold px-3 py-1.5 border border-indigo-500/20 bg-indigo-500/5 hover:bg-indigo-500/10 text-indigo-500 rounded-lg transition"
-                        >
-                          Regenerate Forecast
-                        </button>
-                      </div>
-
-                      {/* Composed Chart */}
-                      <div className="h-80 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart
-                            data={forecastData}
-                            margin={{ top: 20, right: 20, bottom: 20, left: 20 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
-                            <XAxis dataKey="period" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 10 }} />
-                            <YAxis stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 10 }} />
-                            <ChartTooltip
-                              contentStyle={{
-                                backgroundColor: darkMode ? '#1e293b' : '#ffffff',
-                                borderColor: darkMode ? '#334155' : '#e2e8f0',
-                                color: darkMode ? '#f1f5f9' : '#1e293b',
-                                fontSize: 11
-                              }}
-                            />
-                            <Legend wrapperStyle={{ fontSize: 11 }} />
-                            
-                            {/* Confidence Band Area */}
-                            <Area
-                              type="monotone"
-                              dataKey="range"
-                              name="90% Confidence Interval"
-                              fill="#f59e0b"
-                              stroke="none"
-                              fillOpacity={0.15}
-                              connectNulls={true}
-                            />
-                            
-                            {/* Actual Line */}
-                            <Line
-                              type="monotone"
-                              dataKey="actual"
-                              name="Historical Actuals"
-                              stroke="#6366f1"
-                              strokeWidth={2}
-                              dot={false}
-                              connectNulls={true}
-                            />
-                            
-                            {/* Forecast Line */}
-                            <Line
-                              type="monotone"
-                              dataKey="forecast"
-                              name="Future Forecast"
-                              stroke="#f59e0b"
-                              strokeDasharray="5 5"
-                              strokeWidth={2}
-                              dot={false}
-                              connectNulls={true}
-                            />
-
-                            {/* Reference line for start of forecast */}
-                            {(() => {
-                              const lastHist = forecastData.filter(d => d.actual !== null);
-                              const xVal = lastHist.length > 0 ? lastHist[lastHist.length - 1].period : '';
-                              if (!xVal) return null;
-                              return (
-                                <ReferenceLine
-                                  x={xVal}
-                                  stroke={darkMode ? '#64748b' : '#94a3b8'}
-                                  strokeDasharray="3 3"
-                                  label={{
-                                    value: 'Forecast Start',
-                                    position: 'top',
-                                    fill: darkMode ? '#94a3b8' : '#64748b',
-                                    fontSize: 9,
-                                    fontWeight: 'bold'
-                                  }}
-                                />
-                              );
-                            })()}
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </section>
                 )}
 
-                {/* SECTION C — PREDICT ON NEW INPUT */}
-                <section className="space-y-6 pb-32">
+                {/* Predict on New Input */}
+                <section className="space-y-6 pb-32 bg-gradient-to-br from-indigo-500/[0.03] via-slate-50/10 to-indigo-500/[0.01] dark:from-indigo-500/[0.01] dark:via-slate-900/10 dark:to-transparent border border-indigo-500/10 rounded-3xl p-6 shadow-xl shadow-indigo-500/[0.02]">
                   <div>
-                    <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-                      <Sliders className="w-5 h-5 text-indigo-500" />
-                      <span>Section C — Predict on New Input</span>
+                    <h2 className="text-xl font-extrabold text-slate-855 dark:text-slate-100 flex items-center space-x-2">
+                      <Sliders className="w-5 h-5 text-indigo-500 animate-pulse" />
+                      <span>Predict on New Input (Real-time Inference)</span>
                     </h2>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      Enter customized feature inputs to test real-time predictions against your trained models.
+                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1 font-medium font-sans">
+                      Enter customized feature inputs below to test real-time predictions against your trained models.
                     </p>
                   </div>
 
@@ -4805,11 +5140,12 @@ export default function App() {
          ========================================== */}
 
       {/* Backdrop overlay handler */}
-      {(isDataOverviewOpen || isModelInventoryOpen) && (
+      {(isDataOverviewOpen || isModelInventoryOpen || isTrainingHistoryOpen) && (
         <div 
           onClick={() => {
             setIsDataOverviewOpen(false);
             setIsModelInventoryOpen(false);
+            setIsTrainingHistoryOpen(false);
           }}
           className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs transition-opacity duration-300"
         />
@@ -5048,6 +5384,79 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+      </aside>
+
+      {/* RIGHT SIDE PANEL: TRAINING HISTORY */}
+      <aside 
+        className={`fixed top-0 right-0 z-50 h-full w-96 bg-white dark:bg-slate-900 border-l border-slate-100 dark:border-slate-800 shadow-2xl transform transition-transform duration-300 flex flex-col ${isTrainingHistoryOpen ? 'translate-x-0' : 'translate-x-full'}`}
+      >
+        <div className="p-5 border-b border-slate-150 dark:border-slate-800 flex justify-between items-center shrink-0">
+          <div className="flex items-center space-x-2">
+            <History className="w-5 h-5 text-indigo-500" />
+            <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">Training Run History</h3>
+          </div>
+          <button 
+            onClick={() => setIsTrainingHistoryOpen(false)}
+            className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {isHistoryLoading ? (
+            <div className="text-center py-8 text-xs text-slate-400 font-medium">Loading history...</div>
+          ) : trainingHistory.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 dark:text-slate-500">
+              <History className="w-12 h-12 mx-auto mb-3 stroke-1 text-slate-355 dark:text-slate-700" />
+              <span className="text-sm font-semibold block">No saved runs found</span>
+              <p className="text-xs mt-1 max-w-[220px] mx-auto text-slate-405 dark:text-slate-495">Runs are recorded dynamically in history upon successful model fitting.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {trainingHistory.map(run => (
+                <div key={run.id} className="p-4 rounded-xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-900/50 hover:border-slate-200 dark:hover:border-slate-700 transition relative group">
+                  <button 
+                    onClick={() => deleteHistoryRun(run.id)}
+                    className="absolute top-3 right-3 p-1 rounded-md text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    title="Delete run record"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                  <div className="pr-6">
+                    <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider block">
+                      {run.modality || 'Tabular'} · {run.created_at ? new Date(run.created_at).toLocaleDateString() : 'N/A'}
+                    </span>
+                    <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 mt-0.5">
+                      {run.model_name}
+                    </h4>
+                    {run.dataset_name && (
+                      <span className="text-[10px] text-slate-400 block mt-1 font-medium truncate">
+                        Dataset: {run.dataset_name}
+                      </span>
+                    )}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px] font-semibold text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800/60 pt-2">
+                      <span>Target: <strong className="text-slate-750 dark:text-slate-300">{run.target_column}</strong></span>
+                      <span>Features: <strong className="text-slate-750 dark:text-slate-300">{run.feature_count}</strong></span>
+                    </div>
+                    {run.metrics && Object.keys(run.metrics).length > 0 && (
+                      <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/40">
+                        {Object.entries(run.metrics).slice(0, 3).map(([mName, mVal]) => (
+                          <div key={mName} className="text-center bg-slate-100/60 dark:bg-slate-800/40 rounded py-1 px-1.5">
+                            <span className="text-[8px] text-slate-400 font-bold uppercase block truncate">{mName}</span>
+                            <strong className="text-[10px] text-indigo-650 dark:text-indigo-400 block">
+                              {typeof mVal === 'number' ? mVal.toFixed(3) : String(mVal)}
+                            </strong>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </aside>
 

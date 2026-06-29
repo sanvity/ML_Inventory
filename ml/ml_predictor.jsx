@@ -180,7 +180,7 @@ function Tooltip({ content, children, position = "top", style = {} }) {
 }
 
 // ── Step indicator ────────────────────────────────────────────────────────────
-const STEPS = ["Data", "Configure", "Train", "Results", "Predict"];
+const STEPS = ["Data", "Configure", "Train", "Results", "Predict", "History"];
 
 function StepBar({ active, unlocked, onGo }) {
   return (
@@ -188,7 +188,7 @@ function StepBar({ active, unlocked, onGo }) {
       {STEPS.map((s, i) => {
         const done = i < active;
         const cur = i === active;
-        const ok = i <= unlocked;
+        const ok = i <= unlocked || i === 5;
         return (
           <div key={s} style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0 }}>
             <button
@@ -322,7 +322,7 @@ function DataPreview({ data }) {
   );
 }
 
-const ID_KEYWORDS = ["id", "uuid", "index", "row_num", "rownum", "serial", "seq", "key", "unnamed"];
+const ID_KEYWORDS = ["id", "uuid", "row_num", "rownum", "serial", "seq", "key", "unnamed"];
 
 const TARGET_KEYWORDS = [
   "price", "cost", "value", "target", "label", "output", "result",
@@ -701,6 +701,59 @@ function ConfigTab({ data, config, setConfig }) {
           <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginBottom: 10 }}>
             Encode calendar cycles as periodic sine/cosine coordinates to capture time-based intervals.
           </div>
+
+          {/* Smart Temporal Feature Pipeline Card */}
+          <div style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            background: "rgba(99,102,241,0.08)",
+            border: "1px solid rgba(99,102,241,0.25)",
+            marginBottom: 12,
+            fontSize: 11,
+            lineHeight: "1.5",
+            color: "var(--color-text-primary)"
+          }}>
+            <div style={{ fontWeight: 600, color: "#4f46e5", display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span>🧠</span> Smart Temporal Feature Pipeline Engaged
+            </div>
+            <p style={{ color: "var(--color-text-secondary)", margin: "0 0 8px 0" }}>
+              Separate calendar columns (e.g. Year, Month) are auto-detected. The backend automatically coordinates:
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8, margin: "0 0 8px 0" }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "#4f46e5" }}>✓</span>
+                <div>
+                  <strong>Chronological Sort:</strong>
+                  <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>Ranks observations chronologically for leakage-free validation.</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "#4f46e5" }}>✓</span>
+                <div>
+                  <strong>Elapsed Time:</strong>
+                  <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>Creates a continuous trend index from dataset start reference.</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "#4f46e5" }}>✓</span>
+                <div>
+                  <strong>Cyclical Encoding:</strong>
+                  <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>Converts cyclic units to sin/cos to preserve seasonal boundaries.</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "#4f46e5" }}>✓</span>
+                <div>
+                  <strong>Target Lags:</strong>
+                  <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>Generates target lag & rolling means shifted by 1 to prevent leakage.</div>
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: 10, color: "var(--color-text-secondary)", fontStyle: "italic" }}>
+              ℹ️ Model cross-validation compares raw vs combined time dimensions to select the optimal model.
+            </div>
+          </div>
+
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {(data.columns_metadata || []).filter(c => c.type === "datetime" || c.name.toLowerCase().includes("hour") || c.name.toLowerCase().includes("month") || c.name.toLowerCase().includes("week")).map(col => {
               const periodicCfg = config.periodic_columns?.find(p => p.column === col.name);
@@ -1685,6 +1738,111 @@ function PredictTab({ sessionId, config }) {
   );
 }
 
+// ── Tab 5: History ───────────────────────────────────────────────────────────
+function HistoryTab() {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchHistory = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`${API}/api/history`);
+      if (!r.ok) throw new Error("Failed to fetch run history");
+      const d = await r.json();
+      setHistory(Array.isArray(d) ? d : []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const deleteRun = async (runId) => {
+    try {
+      const r = await fetch(`${API}/api/history/${runId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Failed to delete run");
+      setHistory(prev => prev.filter(run => run.id !== runId));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  return (
+    <div style={{ background: "var(--color-background-secondary)", borderRadius: 12, padding: 20, border: "0.5px solid var(--color-border-tertiary)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, color: "var(--color-text-primary)" }}>
+          Training Run History
+        </div>
+        <button onClick={fetchHistory} style={{
+          padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+          background: "#378ADD", color: "#fff", border: "none"
+        }}>
+          Refresh
+        </button>
+      </div>
+
+      {loading && <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading runs…</div>}
+      {error && <div style={{ color: "#A32D2D", fontSize: 13 }}>Error: {error}</div>}
+
+      {!loading && history.length === 0 ? (
+        <div style={{ color: "var(--color-text-secondary)", fontSize: 13, textAlign: "center", padding: "24px 0" }}>
+          No saved runs yet. Train a model to save history.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {history.map(run => (
+            <div key={run.id} style={{
+              background: "var(--color-background-primary)", borderRadius: 8, padding: "14px 18px",
+              border: "0.5px solid var(--color-border-tertiary)", position: "relative"
+            }}>
+              <button 
+                onClick={() => deleteRun(run.id)}
+                style={{
+                  position: "absolute", top: 12, right: 12, background: "none", border: "none",
+                  color: "#A32D2D", cursor: "pointer", fontSize: 12, fontWeight: 500
+                }}
+              >
+                Delete
+              </button>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, paddingRight: 60 }}>
+                <span style={{ fontWeight: 600, fontSize: 13, color: "var(--color-text-primary)" }}>
+                  {run.model_name}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                  {run.created_at ? new Date(run.created_at).toLocaleString() : 'N/A'}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--color-text-secondary)", display: "flex", flexWrap: "wrap", gap: 14 }}>
+                {run.dataset_name && <span>Dataset: {run.dataset_name}</span>}
+                <span>Target: {run.target_column}</span>
+                <span>Features: {run.feature_count}</span>
+              </div>
+              {run.metrics && Object.keys(run.metrics).length > 0 && (
+                <div style={{ display: "flex", gap: 10, marginTop: 8, paddingTop: 8, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                  {Object.entries(run.metrics).slice(0, 4).map(([k, v]) => (
+                    <div key={k} style={{ fontSize: 11 }}>
+                      <span style={{ color: "var(--color-text-secondary)", marginRight: 4 }}>{k}:</span>
+                      <strong style={{ color: "var(--color-text-primary)" }}>
+                        {typeof v === 'number' ? v.toFixed(4) : String(v)}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [step, setStep] = useState(0);
@@ -1800,6 +1958,9 @@ export default function App() {
 
       {/* Tab 4: Predict */}
       {step === 4 && <PredictTab sessionId={sessionId} config={config} />}
+
+      {/* Tab 5: History */}
+      {step === 5 && <HistoryTab />}
 
       {/* Chart.js CDN */}
       <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" />

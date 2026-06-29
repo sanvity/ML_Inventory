@@ -1,17 +1,17 @@
 # EY ML Analysis & Predictor Studio
 
-A modern, no-code tabular machine learning playground designed to take raw data and turn it into comparative trained pipelines in minutes.
+A modern, no-code machine learning playground designed to ingest raw tabular data and turn it into comparative, fully optimized model pipelines in minutes.
 
 ---
 
-## 🚀 Key Features
+## 🎯 What the Application Achieves
 
-*   **Guided Ingestion & Setup:** Upload CSV, JSON, or Excel datasets. The application auto-detects column types, recommends potential prediction targets, and splits features into ID, Date/Time, Categorical, and Influencing variables.
-*   **Intelligent Aggregation Pipeline:** Auto-detects and applies aggregation methods tailored to feature classifications (e.g., `mode` for IDs/Categories/Dates, and `sum`/`mean`/`max` for numeric predictors). Categorical columns are auto-preselected for group-by operations.
-*   **Flexible Model Inventory:** Select, train, and compare 13 machine learning algorithms across Classification, Regression, Clustering, and Forecasting paradigms simultaneously.
-*   **Hyperparameter Tuning & Specifics:** Grouped manual model tuning settings paired with Optuna Bayesian optimization to auto-tune hyperparameter search spaces under cross-validation.
-*   **Consolidated Diagnostics & Insights:** Swappable model diagnostics panels featuring interactive evaluation metrics lists, feature importance bar charts, validation loss curves, and predictions preview tables.
-*   **Compact UI Architecture:** Customized layout spacing with minimal padding and margin whitespace to present an information-dense overview of setup features.
+*   **Fast-Tracks Model Benchmarking:** Eliminates hours of manual boilerplate code. It allows developers and analysts to test, optimize, and cross-compare up to 13 distinct machine learning algorithms simultaneously.
+*   **Automates Data Preparation:** Solves data format and type issues out of the box by automatically classifying features, detecting calendar components, and scaling numerical inputs.
+*   **Enables Low-Code Aggregations:** Simplifies raw transactional logs by dynamically inferring correct grouping functions, categorical mappings, and pre-selecting variables for aggregations.
+*   **Integrates Production-Ready Hyperparameter Tuning:** Democratizes Bayesian optimization by embedding Optuna trials directly into the workflow, making hyperparameter tuning accessible in a few clicks.
+*   **Delivers Explainable Diagnostics:** Provides instant comparison leaderboards, SHAP feature importance charts, and residual distributions to immediately understand model decisions and performance.
+*   **Generates Exportable Pipeline Code:** Produces real-time Pandas code snippets matching the configurations applied in the UI, bridging the gap between no-code experimentation and production deployments.
 
 ---
 

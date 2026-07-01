@@ -23,6 +23,7 @@ This document details the modifications and implementations completed on the Int
 
 ### 2. Grouping Aggregations (Page 2)
 - Implemented a searchable, dynamic Group By multi-select chips dropdown populated from all dataset columns.
+- **Dynamic Year + Month Virtual Column:** When the dataset is loaded, if a datetime column (or separate Year and Month columns) exists, the engine dynamically injects a virtual `"Year + Month"` column (e.g. mapping dates to `YYYY-MM` format). This column is automatically available as a Group By selection, enabling users to easily group transactional or daily records into monthly buckets.
 - Group By columns are automatically excluded from aggregation mapping, resetting to default functions when removed.
 - Refined the Pandas syntax preview for dynamic groupby aggregations.
 
@@ -263,4 +264,48 @@ All assertions passed, verifying the semantic and statistical robustness of the 
   - Dynamically formatted label keys to `YYYY-MM` (e.g. `2024-03`) for the forecasting chart when the combined sorting option is active.
 - **Backend Alignment**:
   - Expanded `detect_calendar_columns` and chronological sort sequences in both [utils.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/api/utils.py) and [ml_backend.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/ml/ml_backend.py) to support `date` and `timestamp` keys.
+
+### 8. Page 3: Data Quality Intelligence Integration
+- **Three Pillar Assessment**:
+  - Added real-time score calculations (0–100) for **Granularity** (cardinality ratio and grain regularities), **Historicity** (data freshness, coverage span, and chronological null rate degradation), and **Value** (null ratios, business rules, and stability baseline checks).
+  - Prominently displays an aggregate **Forecasting Readiness Score** with corresponding readiness badges.
+  - **Pillar Impact Guide**: Created an explanatory glossary card explaining what Granularity, Historicity, and Value represent and exactly how their variations impact modeling metrics, overfitting risks, and weight adjustments.
+- **Unified Profiling Module (`datasetProfiler`)**:
+  - Encapsulates chronological data sorting, multi-feature anomaly detection, and three-pillar scoring in a single, reusable module. All downstream views (the time-series charts, anomaly logs, and pillar reports) consume this single module's output to prevent redundant calculations and ensure data consistency.
+  - **Single Chronological Sort:** The dataset is sorted ascending on the chronological index **exactly once** during initialization. All subsequent sequential checks, score calculations, and Recharts line graph plots read directly from this single sorted reference frame.
+  - **Split Anomaly Scans:**
+    - *Order-Sensitive:* Null Spikes and Flatlines scan the pre-sorted array sequentially to identify chronological patterns (5+ consecutive nulls or repeating values).
+    - *Order-Independent:* Outlier checks (Z-Score and IQR) calculate distribution parameters (mean, standard deviation, quartiles) across the global values first, which is order-independent, and map them back to rows.
+  - **Location Row Pointers:** The "Location" column in the tables refers explicitly to the **original upload row index** (1-indexed) rather than the post-sort array offset. This allows users to easily locate the bad record in their raw spreadsheet source files. Cleanup actions filter/map by comparing `row.__originalIdx` directly to prevent offset mismatch issues on sorted arrays.
+  - **Spotlight Panel**: Features a high-visibility card highlighting the single **most significant active anomaly** detected in the current dataset (sorted by High severity, then Z-score deviation), suggesting the recommended mitigation action and providing single-click Impute or Quarantine buttons.
+- **Interactive Action Panel & Collective Operations**:
+  - Enabled direct cleaning capabilities: **Quarantine** (excludes row), **Impute** (substitutes values dynamically), **Alert** (logs notifications), and **Ignore** (dismisses with reason).
+  - Added **Collective Operations** buttons to resolve active anomalies at scale:
+    - **Impute All:** Dynamically calculates medians/modes for all active anomalies and fills them simultaneously.
+    - **Quarantine All:** Removes all row records containing active anomalies in a single operation.
+    - **Ignore All:** Globally dismisses all active anomalies with a logged collective justification reason.
+  - Updates the data model in state in real-time, instantly refreshing the pillar scores.
+- **Aggregation Sequence & Order of Operations**:
+  - Implemented the exact order requested: **Outlier and anomaly detection is run on the raw, unaggregated records first**, allowing users to identify, inspect, and fix individual anomalies in their raw form.
+  - **Re-Aggregation:** Once raw entries are resolved (imputed or quarantined), the dataset is dynamically re-aggregated on the fly before calculations are run or sent further down the pipeline (ensuring Page 4 model training and metrics consume the final, aggregated version of the cleaned dataset).
+- **Proceed Gate & Blockers Checklist**:
+  - Blocks model training if the readiness score is below 70.
+  - Dynamically evaluates all failed assessment pillars (< 70) and prints a dedicated checklist of **mandatory, actionable required fixes** (e.g. enabling Page 2 aggregation to resolve granularity, using bulk cleaning to fix value completeness).
+- **Page 4 Data Quality Contextual Advisory**:
+  - Shuffled the old Page 3 (model testing) to Page 4.
+  - Appended the quality report and audit trail to Page 4, warning users when prediction confidence is high but historicity is low or granularity is questionable.
+- **Horizontal Progress Flowchart Navigation**:
+  - Replaced the simple textual page numbers in the top header with a sleek **horizontal flowchart progress bar**.
+  - Displays all pipeline stages visually: **Data Setup ➔ Pre-process ➔ Quality Audit ➔ Model Testing**.
+  - Connective lines are color-coded based on wizard status (Emerald for completed, Indigo for active).
+  - Supports **clickable step navigation** enabling users to jump directly to any unlocked stage (based on validation rules) instead of paging sequentially.
+  - Responsive design hides labels on mobile screens to preserve layout density.
+- **Robust Date Parsing & State Sync**:
+  - **Regional Date Parser (`parseChronologicalDate`):** Introduced a flexible date-parsing function capable of handling standard ISO (`YYYY-MM-DD`), European/British (`DD/MM/YYYY`, `DD-MM-YYYY`), and dot-separated (`DD.MM.YYYY`) formats. This prevents sorting failures when files containing custom date strings are uploaded.
+  - **DQI State Sync:** Added parameter shift tracking via `dqiInitializedFor`. If the user goes back to Page 2, alters the target/date columns, and returns to Page 3, the DQI pipeline re-initializes and re-sorts automatically. If they remain on Page 3 to impute/quarantine anomalies, their corrections are protected and not reset.
+  - **Global chronological sort:** The entire dataset is sorted ascending by Year-Month/Date inside `addYearMonthVirtualColumn` immediately upon dataset loading or upload. This ensures that Page 2 preprocessing, Page 3 Quality Audit, and Page 4 model training naturally consume clean chronological datasets from the outset.
+- **Custom Chronological Chart Tooltip & Pointer:**
+  - Designed and implemented a premium dark custom tooltip component for the Recharts line graph.
+  - When hovered, the tooltip pointer maps and displays the original upload row index (`Row X`) alongside the Year-Month value (e.g. `2024-06`), aligning hover locations with physical record pointers.
+  - Integrates an animated warning indicator (`animate-pulse` pink badge) that highlights flagged anomalies dynamically under the cursor.
 

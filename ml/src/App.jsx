@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { 
-  ResponsiveContainer, 
-  LineChart, 
-  Line, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip as ChartTooltip, 
-  Legend, 
-  BarChart, 
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as ChartTooltip,
+  Legend,
+  BarChart,
   Bar,
   ComposedChart,
   Area,
-  ReferenceLine
+  ReferenceLine,
+  Cell
 } from 'recharts';
 import {
   Brain,
@@ -45,8 +46,10 @@ import {
   FolderOpen,
   Award,
   History,
-  Trash2
+  Trash2,
+  TrendingUp
 } from 'lucide-react';
+import { calculateReadiness } from './utils/readinessCalculator';
 
 // ==========================================
 // 1. MODEL CATALOG & REGISTRY
@@ -424,7 +427,7 @@ const SAMPLE_DATASETS = {
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
   if (lines.length === 0) return null;
-  
+
   // Helper to split row handling commas inside quotes
   const splitCSVRow = (line) => {
     const result = [];
@@ -480,44 +483,44 @@ const parseJSON = (text) => {
 
 const calculatePearsonCorrelation = (rows, colName, targetName) => {
   if (!colName || !targetName || colName === targetName || targetName === 'none') return 0;
-  
+
   const xValues = [];
   const yValues = [];
-  
+
   for (let row of rows) {
     let x = parseFloat(row[colName]);
     let y = parseFloat(row[targetName]);
-    
+
     if (isNaN(x)) {
       const val = String(row[colName] || '').toLowerCase().trim();
       if (['yes', 'true', '1', 'male', 'downtown', 'yes'].includes(val)) x = 1;
       else if (['no', 'false', '0', 'female', 'suburban', 'no'].includes(val)) x = 0;
       else continue;
     }
-    
+
     if (isNaN(y)) {
       const val = String(row[targetName] || '').toLowerCase().trim();
       if (['yes', 'true', '1', 'churned', 'yes'].includes(val)) y = 1;
       else if (['no', 'false', '0', 'active', 'no'].includes(val)) y = 0;
       else continue;
     }
-    
+
     xValues.push(x);
     yValues.push(y);
   }
-  
+
   const n = xValues.length;
   if (n < 2) return 0;
-  
+
   const sumX = xValues.reduce((a, b) => a + b, 0);
   const sumY = yValues.reduce((a, b) => a + b, 0);
   const sumXSq = xValues.reduce((a, b) => a + b * b, 0);
   const sumYSq = yValues.reduce((a, b) => a + b * b, 0);
   const sumXY = xValues.reduce((a, b, idx) => a + b * yValues[idx], 0);
-  
+
   const numerator = n * sumXY - sumX * sumY;
   const denominator = Math.sqrt((n * sumXSq - sumX * sumX) * (n * sumYSq - sumY * sumY));
-  
+
   if (denominator === 0) return 0;
   return numerator / denominator;
 };
@@ -534,21 +537,21 @@ const nonEpochModels = [
 
 const inferAggFunction = (colName, colType, dataset = null) => {
   const name = colName.toLowerCase();
-  
+
   if (dataset) {
     const colMeta = dataset.columnsInfo.find(c => c.name === colName);
     if (colMeta) {
       const uniqueRatio = colMeta.uniqueCount / dataset.rows;
-      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) || 
-                        name.includes('id') || name === 'key';
-      
+      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) ||
+        name.includes('id') || name === 'key';
+
       // Auto aggregate based on categories identified
       if (isIdField && colType !== 'datetime') {
         return 'mode'; // ID Features
-      } else if (colType === 'datetime' || 
-                 name.includes('date') || name.includes('time') || 
-                 name.includes('timestamp') || name.includes('year') ||
-                 name.includes('month') || name.includes('day')) {
+      } else if (colType === 'datetime' ||
+        name.includes('date') || name.includes('time') ||
+        name.includes('timestamp') || name.includes('year') ||
+        name.includes('month') || name.includes('day')) {
         return 'mode'; // Date/Time Features
       } else if (colType === 'categorical') {
         return 'mode'; // Categorical Features
@@ -561,16 +564,16 @@ const inferAggFunction = (colName, colType, dataset = null) => {
   if (maxKeywords.some(kw => name.includes(kw))) {
     return 'max';
   }
-  
+
   const sumKeywords = [
-    'count', 'qty', 'units', 'volume', 'revenue', 'sales', 'sum', 'total', 
-    'cogs', 'profit', 'expense', 'opex', 'ebitda', 'depreciation', 'ebit', 
+    'count', 'qty', 'units', 'volume', 'revenue', 'sales', 'sum', 'total',
+    'cogs', 'profit', 'expense', 'opex', 'ebitda', 'depreciation', 'ebit',
     'interest', 'taxes', 'income', 'marketing'
   ];
   if (sumKeywords.some(kw => name.includes(kw))) {
     return 'sum';
   }
-  
+
   if (colType === 'numeric') {
     return 'mean';
   }
@@ -580,11 +583,11 @@ const inferAggFunction = (colName, colType, dataset = null) => {
 const computeFeatureStatuses = (db, target, dateCol) => {
   if (!db) return {};
   const statuses = {};
-  
+
   db.columnsInfo.forEach(col => {
     const isTarget = col.name === target;
     const isDate = col.name === dateCol;
-    
+
     // Calculate correlation
     let corr = 0;
     if (db.id && SAMPLE_DATASETS[db.id] && SAMPLE_DATASETS[db.id].defaultTarget === target) {
@@ -593,20 +596,20 @@ const computeFeatureStatuses = (db, target, dateCol) => {
     } else {
       corr = calculatePearsonCorrelation(db.sampleRows, col.name, target);
     }
-    
+
     // Heuristics
     const uniqueRatio = col.uniqueCount / db.rows;
     const isIdField = uniqueRatio > 0.95 && db.rows > 15;
     const isHighNulls = col.nullPercent > 40;
-    
+
     const containsId = col.name.toLowerCase().includes('id') || col.name.toLowerCase() === 'key';
     const isLeakage = (containsId && !isTarget) || (Math.abs(corr) >= 0.95 && !isTarget);
-    
+
     const isNoVariance = col.uniqueCount <= 1;
-    
+
     let warning = '';
     let recommend = false;
-    
+
     if (isTarget) {
       recommend = false;
     } else if (isDate) {
@@ -624,14 +627,14 @@ const computeFeatureStatuses = (db, target, dateCol) => {
         warning = 'No variance';
       }
     }
-    
+
     statuses[col.name] = {
       recommend,
       warning,
       corr
     };
   });
-  
+
   return statuses;
 };
 
@@ -694,23 +697,23 @@ const autoDetectGoal = (db, targetCol) => {
 
 const isBestMetric = (metricName, metricValue, allRows) => {
   if (!allRows || allRows.length <= 1) return false;
-  
+
   const parseVal = (v) => {
     if (typeof v === 'string') {
       return parseFloat(v.replace(/%/g, '').replace(/,/g, ''));
     }
     return parseFloat(v);
   };
-  
+
   const parsedVal = parseVal(metricValue);
   if (isNaN(parsedVal)) return false;
-  
+
   const allParsed = allRows.map(r => parseVal(r[metricName])).filter(v => !isNaN(v));
   if (allParsed.length === 0) return false;
-  
+
   // Identify if lower is better
   const lowerIsBetter = ['mae', 'rmse', 'mape', 'davies-bouldin index'].some(kw => metricName.toLowerCase().includes(kw));
-  
+
   if (lowerIsBetter) {
     const minVal = Math.min(...allParsed);
     return parsedVal === minVal;
@@ -734,14 +737,14 @@ const ID_KEYWORDS = ["id", "uuid", "row_num", "rownum", "serial", "seq", "key", 
 
 const detectTargetModelJS = (columnsInfo, totalRows) => {
   if (!columnsInfo || columnsInfo.length === 0) return null;
-  
+
   let bestCol = null;
   let bestScore = -Infinity;
   const nCols = columnsInfo.length;
 
   columnsInfo.forEach((col, idx) => {
     const colLower = String(col.name).toLowerCase();
-    
+
     // 1. Semantic Match score
     let keywordMatch = 0.0;
     for (const kw of TARGET_KEYWORDS) {
@@ -750,7 +753,7 @@ const detectTargetModelJS = (columnsInfo, totalRows) => {
         break;
       }
     }
-    
+
     let isId = false;
     for (const kw of ID_KEYWORDS) {
       if (colLower.includes(kw)) {
@@ -759,26 +762,26 @@ const detectTargetModelJS = (columnsInfo, totalRows) => {
         break;
       }
     }
-    
+
     // 2. Position score
     const relativeIdx = nCols > 1 ? idx / nCols : 0.5;
-    
+
     // 3. Cardinality ratio
     const uniqueRatio = totalRows > 0 ? col.uniqueCount / totalRows : 0.0;
     let uniqueRatioPenalty = 0.0;
     if (uniqueRatio > 0.95 && (isId || col.type !== 'numeric')) {
       uniqueRatioPenalty = 1.0;
     }
-    
+
     // 4. Null percentage penalty
     const nullPct = (col.nullPercent || 0) / 100;
-    
+
     // 5. Correlation score (default placeholder as 0.0 since we compute it for custom files later, but let's check key correlation tags if they exist in dataset object)
     let meanCorr = 0.0;
-    
+
     // 6. Datetime feature
     const isDatetime = col.type === 'datetime' || colLower.includes('date') || colLower.includes('time') ? 1.0 : 0.0;
-    
+
     const score = (
       5.0 * keywordMatch +
       2.5 * meanCorr +
@@ -787,26 +790,26 @@ const detectTargetModelJS = (columnsInfo, totalRows) => {
       6.0 * nullPct -
       4.0 * isDatetime
     );
-    
+
     if (score > bestScore) {
       bestScore = score;
       bestCol = col.name;
     }
   });
-  
+
   return bestCol || columnsInfo[columnsInfo.length - 1].name;
 };
 
 const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
   if (!columnsInfo || columnsInfo.length === 0) return [];
-  
+
   const recommendations = [];
   const nCols = columnsInfo.length;
   const hasDateCol = columnsInfo.some(c => c.type === 'datetime' || String(c.name).toLowerCase().includes('date') || String(c.name).toLowerCase().includes('time'));
 
   columnsInfo.forEach((col, idx) => {
     const colLower = String(col.name).toLowerCase();
-    
+
     // 1. Semantic Match score
     let keywordMatch = 0.0;
     for (const kw of TARGET_KEYWORDS) {
@@ -815,7 +818,7 @@ const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
         break;
       }
     }
-    
+
     let isId = false;
     for (const kw of ID_KEYWORDS) {
       if (colLower.includes(kw)) {
@@ -824,26 +827,26 @@ const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
         break;
       }
     }
-    
+
     // 2. Position score
     const relativeIdx = nCols > 1 ? idx / nCols : 0.5;
-    
+
     // 3. Cardinality ratio
     const uniqueRatio = totalRows > 0 ? col.uniqueCount / totalRows : 0.0;
     let uniqueRatioPenalty = 0.0;
     if (uniqueRatio > 0.95 && (isId || col.type !== 'numeric')) {
       uniqueRatioPenalty = 1.0;
     }
-    
+
     // 4. Null percentage penalty
     const nullPct = (col.nullPercent || 0) / 100;
-    
+
     // 5. Correlation score
     let meanCorr = 0.0;
-    
+
     // 6. Datetime feature
     const isDatetime = col.type === 'datetime' || colLower.includes('date') || colLower.includes('time') ? 1.0 : 0.0;
-    
+
     const score = (
       5.0 * keywordMatch +
       2.5 * meanCorr +
@@ -852,7 +855,7 @@ const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
       6.0 * nullPct -
       4.0 * isDatetime
     );
-    
+
     // Auto-detect suggested approach for this target
     let approach = 'regression';
     if (col.type === 'categorical') {
@@ -866,23 +869,23 @@ const recommendTargetColumnsJS = (columnsInfo, totalRows, threshold = 0.0) => {
         approach = 'regression';
       }
     }
-    
+
     recommendations.push({
       column: col.name,
       score: parseFloat(score.toFixed(2)),
       approach: approach
     });
   });
-  
+
   // Sort by score descending
   recommendations.sort((a, b) => b.score - a.score);
-  
+
   // Filter by threshold
   let filtered = recommendations.filter(r => r.score >= threshold);
   if (filtered.length === 0 && recommendations.length > 0) {
     filtered = [recommendations[0]];
   }
-  
+
   return filtered;
 };
 
@@ -954,6 +957,26 @@ export default function App() {
   const [activePredictionModel, setActivePredictionModel] = useState('');
   const [activeDiagModel, setActiveDiagModel] = useState('');
 
+  // Data Quality Intelligence (DQI) Page states
+  const [dqiDataset, setDqiDataset] = useState(null);
+  const [dqiAnomalyLog, setDqiAnomalyLog] = useState([]);
+  const [dqiAuditTrail, setDqiAuditTrail] = useState([]);
+  const [dqiSelectedFeature, setDqiSelectedFeature] = useState('');
+  const [dqiInitializedFor, setDqiInitializedFor] = useState({ datasetId: '', target: '', dateCol: '' });
+  // Category trend breakdown state (Page 3)
+  const [dqiPrimaryCategory, setDqiPrimaryCategory] = useState('');
+  const [dqiSubgroupCategory, setDqiSubgroupCategory] = useState('none');
+  const [dqiCategoryPanelOpen, setDqiCategoryPanelOpen] = useState(true);
+
+  const dqiCategoryColumns = useMemo(() => {
+    const cols = [];
+    if (dqiPrimaryCategory) cols.push(dqiPrimaryCategory);
+    if (dqiSubgroupCategory && dqiSubgroupCategory !== 'none' && dqiSubgroupCategory !== dqiPrimaryCategory) {
+      cols.push(dqiSubgroupCategory);
+    }
+    return cols;
+  }, [dqiPrimaryCategory, dqiSubgroupCategory]);
+
   const recommendedTargets = useMemo(() => {
     if (!dataset) return [];
     // Filter with threshold 0.0 to recommend reasonable columns
@@ -964,11 +987,11 @@ export default function App() {
     if (!results || !results.models) return '';
     const models = Object.values(results.models);
     if (models.length === 0) return '';
-    
+
     let bestKey = models[0].id;
     let bestValue = -Infinity;
     let lowestValue = Infinity;
-    
+
     models.forEach(m => {
       if (goal === 'classification') {
         const val = parseFloat(m.metrics['Accuracy']);
@@ -996,7 +1019,7 @@ export default function App() {
         }
       }
     });
-    
+
     return bestKey;
   };
 
@@ -1097,7 +1120,7 @@ export default function App() {
 
   const chronologicalOrderOptions = useMemo(() => {
     if (!dataset) return [];
-    
+
     const hasYearCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('year'));
     const hasMonthCol = dataset.columnsInfo.some(c => c.name.toLowerCase().includes('month'));
 
@@ -1172,19 +1195,19 @@ export default function App() {
     orderedColumns.forEach(col => {
       const nameLower = col.name.toLowerCase();
       const uniqueRatio = col.uniqueCount / dataset.rows;
-      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) || 
-                        nameLower.includes('id') || 
-                        nameLower === 'key';
+      const isIdField = (uniqueRatio > 0.95 && dataset.rows > 15) ||
+        nameLower.includes('id') ||
+        nameLower === 'key';
 
       if (isIdField && col.type !== 'datetime') {
         groups['ID Features'].push(col);
-      } else if (col.type === 'datetime' || 
-                 nameLower.includes('date') || 
-                 nameLower.includes('time') || 
-                 nameLower.includes('timestamp') ||
-                 nameLower.includes('year') ||
-                 nameLower.includes('month') ||
-                 nameLower.includes('day')) {
+      } else if (col.type === 'datetime' ||
+        nameLower.includes('date') ||
+        nameLower.includes('time') ||
+        nameLower.includes('timestamp') ||
+        nameLower.includes('year') ||
+        nameLower.includes('month') ||
+        nameLower.includes('day')) {
         groups['Date/Time Features'].push(col);
       } else if (col.type === 'categorical') {
         groups['Categorical Features'].push(col);
@@ -1199,7 +1222,7 @@ export default function App() {
   const estimatedOutputRows = useMemo(() => {
     if (!dataset) return 0;
     if (!applyAggregation || groupByColumns.length === 0) return dataset.rows;
-    
+
     // Estimate combination of group by unique counts
     let product = 1;
     groupByColumns.forEach(colName => {
@@ -1208,26 +1231,26 @@ export default function App() {
         product *= colMeta.uniqueCount;
       }
     });
-    
+
     // Capped at dataset.rows
     return Math.min(dataset.rows, product);
   }, [dataset, applyAggregation, groupByColumns]);
 
   const pandasPreviewCode = useMemo(() => {
     const groupbyStr = groupByColumns.map(c => `'${c}'`).join(', ');
-    
+
     // Aggregation table rows: selectedFeaturesList MINUS groupByColumns MINUS targetColumn
     const aggCols = selectedFeaturesList.filter(f => !groupByColumns.includes(f) && f !== targetColumn);
-    
+
     const lines = aggCols.map(col => {
       const colMeta = dataset?.columnsInfo.find(c => c.name === col);
       const colType = colMeta ? colMeta.type : 'numeric';
       const fn = customAggMappings[col] || inferAggFunction(col, colType, dataset);
       return `    ${col} = ('${col}', '${fn}')`;
     });
-    
+
     const linesStr = lines.join(',\n');
-    
+
     return `agg_df = df.groupby([${groupbyStr}]).agg(\n${linesStr}\n).reset_index()`;
   }, [groupByColumns, selectedFeaturesList, customAggMappings, targetColumn, dataset]);
 
@@ -1264,7 +1287,7 @@ export default function App() {
   const detectedTimeComponents = useMemo(() => {
     if (!dataset) return [];
     const components = [];
-    
+
     const isValidDate = (v) => {
       if (v === null || v === undefined) return false;
       const strVal = String(v).trim();
@@ -1328,7 +1351,7 @@ export default function App() {
           let componentType = 'month';
           let label = 'Month';
           let defaultChecked = true;
-          
+
           if (nameLower.includes('year')) {
             componentType = 'year';
             label = 'Year';
@@ -1354,7 +1377,7 @@ export default function App() {
             label = 'Quarter';
             defaultChecked = false;
           }
-          
+
           components.push({
             id: col.name,
             componentType,
@@ -1455,13 +1478,13 @@ export default function App() {
   // Compute correlation for a specific feature column relative to target
   const getFeatureCorrelation = (colName) => {
     if (!dataset || !targetColumn || targetColumn === 'none') return 0;
-    
+
     // Check if hardcoded in sample dataset
     if (SAMPLE_DATASETS[dataset.id] && SAMPLE_DATASETS[dataset.id].defaultTarget === targetColumn) {
       const corr = SAMPLE_DATASETS[dataset.id].correlations[colName];
       if (corr !== undefined) return corr;
     }
-    
+
     // Otherwise calculate dynamically
     return calculatePearsonCorrelation(dataset.sampleRows, colName, targetColumn);
   };
@@ -1485,7 +1508,7 @@ export default function App() {
     const prevFeatures = prevFeaturesRef.current;
     const added = selectedFeaturesList.filter(f => !prevFeatures.includes(f));
     const removed = prevFeatures.filter(f => !selectedFeaturesList.includes(f));
-    
+
     prevFeaturesRef.current = selectedFeaturesList;
 
     // 1. Synchronize One-Hot Encoding
@@ -1530,9 +1553,112 @@ export default function App() {
   }, [selectedFeaturesList, dataset, dateColumn, detectedTimeComponents]);
 
 
+  const addYearMonthVirtualColumn = (db) => {
+    if (!db || !db.sampleRows || db.sampleRows.length === 0) return db;
+
+    // Find chronological column candidates
+    const dateColMeta = db.columnsInfo.find(c => c.type === 'datetime' || c.name.toLowerCase() === 'date' || c.name.toLowerCase() === 'timestamp');
+    const hasYear = db.columnsInfo.some(c => c.name.toLowerCase() === 'year');
+    const hasMonth = db.columnsInfo.some(c => c.name.toLowerCase() === 'month');
+
+    let enrichedRows = [...db.sampleRows];
+    let newColInfo = null;
+
+    // ONLY generate virtual Year + Month column if we have separate Year & Month columns AND no combined date column
+    const shouldAddVirtual = !dateColMeta && hasYear && hasMonth;
+
+    if (shouldAddVirtual && !db.columnsInfo.some(c => c.name === 'Year + Month')) {
+      const yCol = db.columnsInfo.find(c => c.name.toLowerCase() === 'year').name;
+      const mCol = db.columnsInfo.find(c => c.name.toLowerCase() === 'month').name;
+      const MONTH_MAP = {
+        'jan': '01', 'january': '01', 'feb': '02', 'february': '02', 'mar': '03', 'march': '03',
+        'apr': '04', 'april': '04', 'may': '05', 'jun': '06', 'june': '06', 'jul': '07', 'july': '07',
+        'aug': '08', 'august': '08', 'sep': '09', 'september': '09', 'oct': '10', 'october': '10',
+        'nov': '11', 'november': '11', 'dec': '12', 'december': '12'
+      };
+      const generateFn = (row) => {
+        const yVal = row[yCol];
+        const mVal = row[mCol];
+        if (yVal === null || yVal === undefined || mVal === null || mVal === undefined) return 'Unknown';
+        let mStr = String(mVal).trim().toLowerCase();
+        let mNum = MONTH_MAP[mStr];
+        if (!mNum) {
+          const num = Number(mVal);
+          mNum = isNaN(num) ? '01' : String(num).padStart(2, '0');
+        }
+        return `${yVal}-${mNum}`;
+      };
+
+      enrichedRows = db.sampleRows.map(row => {
+        const val = generateFn(row);
+        return {
+          ...row,
+          'Year + Month': val,
+          'Combined Year + Month': val
+        };
+      });
+
+      const uniqueValues = new Set(enrichedRows.map(r => r['Year + Month']).filter(v => v !== 'Unknown'));
+      const samples = enrichedRows.slice(0, 5).map(r => r['Year + Month']);
+      newColInfo = {
+        name: 'Year + Month',
+        type: 'categorical',
+        nullPercent: parseFloat(((enrichedRows.filter(r => r['Year + Month'] === 'Unknown').length / enrichedRows.length) * 100).toFixed(1)),
+        uniqueCount: uniqueValues.size,
+        missing: enrichedRows.filter(r => r['Year + Month'] === 'Unknown').length,
+        samples
+      };
+    }
+
+    // Sort entire dataset chronologically ascending
+    const sortMonthMap = {
+      'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+      'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
+      'aug': 8, 'august': 8, 'sep': 9, 'september': 9, 'oct': 10, 'october': 10,
+      'nov': 11, 'november': 11, 'dec': 12, 'december': 12
+    };
+    const getMonthVal = (mVal) => {
+      if (mVal === null || mVal === undefined) return 1;
+      const mStr = String(mVal).trim().toLowerCase();
+      const mapped = sortMonthMap[mStr];
+      if (mapped !== undefined) return mapped;
+      const num = Number(mVal);
+      return isNaN(num) ? 1 : num;
+    };
+
+    const hasYearCol = db.columnsInfo.find(c => c.name.toLowerCase() === 'year')?.name;
+    const hasMonthCol = db.columnsInfo.find(c => c.name.toLowerCase() === 'month')?.name;
+    const dateCol = dateColMeta?.name;
+
+    enrichedRows.sort((a, b) => {
+      if (hasYearCol && hasMonthCol) {
+        const yA = Number(a[hasYearCol]) || 0;
+        const yB = Number(b[hasYearCol]) || 0;
+        if (yA !== yB) return yA - yB;
+        const mA = getMonthVal(a[hasMonthCol]);
+        const mB = getMonthVal(b[hasMonthCol]);
+        return mA - mB;
+      } else if (dateCol) {
+        const dA = new Date(a[dateCol]);
+        const dB = new Date(b[dateCol]);
+        if (!isNaN(dA.getTime()) && !isNaN(dB.getTime())) {
+          return dA - dB;
+        }
+      }
+      return 0;
+    });
+
+    return {
+      ...db,
+      columnsInfo: newColInfo ? [newColInfo, ...db.columnsInfo] : db.columnsInfo,
+      sampleRows: enrichedRows
+    };
+  };
+
   // Autocomplete and initialize states when dataset or target changes
   const handleDatasetSelect = (selectedDb) => {
-    setDataset(selectedDb);
+    const enrichedDb = addYearMonthVirtualColumn(selectedDb);
+    setDataset(enrichedDb);
 
     if (selectedDb.task === 'clustering') {
       setGoal('clustering');
@@ -1602,7 +1728,7 @@ export default function App() {
     setTimeSinCosWeekday(false);
     setTimeYearScaling('none');
     setPredictionsPage(0);
-    
+
     // Reset Data Overview Filters
     setOverviewSearch('');
     setOverviewSortCol('');
@@ -1730,7 +1856,7 @@ export default function App() {
           const samples = parsed.rows.slice(0, 5).map(r => r[header]);
           let nulls = 0;
           const uniqueValues = new Set();
-          
+
           parsed.rows.forEach(r => {
             const v = r[header];
             if (v === undefined || v === null || String(v).trim() === '' || String(v).toLowerCase() === 'null') {
@@ -1846,8 +1972,6 @@ export default function App() {
       return merged;
     });
   }, [dataset]);
-
-
   // Model toggler
   const toggleModelSelection = (modelId) => {
     if (selectedModels.includes(modelId)) {
@@ -1857,28 +1981,1039 @@ export default function App() {
     }
   };
 
+  const aggregateDataset = (ds, groupByCols, aggMappings) => {
+    if (!ds || !ds.sampleRows || ds.sampleRows.length === 0) return ds;
+
+    const groups = {};
+    ds.sampleRows.forEach(row => {
+      const groupKey = groupByCols.map(col => {
+        const val = row[col];
+        return val === null || val === undefined ? 'null' : String(val);
+      }).join('|');
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+      groups[groupKey].push(row);
+    });
+
+    const newSampleRows = [];
+    Object.entries(groups).forEach(([groupKey, groupRows]) => {
+      const aggregatedRow = {};
+      groupByCols.forEach(col => {
+        aggregatedRow[col] = groupRows[0][col];
+      });
+
+      ds.columnsInfo.forEach(col => {
+        const colName = col.name;
+        if (groupByCols.includes(colName)) return;
+
+        const rawVals = groupRows.map(r => r[colName]);
+        const vals = rawVals.filter(v => v !== null && v !== undefined && String(v).trim() !== '' && String(v).toLowerCase() !== 'null');
+
+        if (vals.length === 0) {
+          aggregatedRow[colName] = null;
+          return;
+        }
+
+        const method = aggMappings[colName] || 'mean';
+        if (col.type === 'numeric') {
+          const numVals = vals.map(Number).filter(v => !isNaN(v));
+          if (numVals.length === 0) {
+            aggregatedRow[colName] = null;
+            return;
+          }
+          if (method === 'sum') {
+            aggregatedRow[colName] = numVals.reduce((a, b) => a + b, 0);
+          } else if (method === 'max') {
+            aggregatedRow[colName] = Math.max(...numVals);
+          } else if (method === 'min') {
+            aggregatedRow[colName] = Math.min(...numVals);
+          } else if (method === 'first') {
+            aggregatedRow[colName] = numVals[0];
+          } else {
+            aggregatedRow[colName] = numVals.reduce((a, b) => a + b, 0) / numVals.length;
+          }
+        } else {
+          if (method === 'first') {
+            aggregatedRow[colName] = vals[0];
+          } else {
+            const counts = {};
+            vals.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
+            const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+            aggregatedRow[colName] = sorted[0][0];
+          }
+        }
+      });
+      newSampleRows.push(aggregatedRow);
+    });
+
+    const newColumnsInfo = ds.columnsInfo.map(col => {
+      const colName = col.name;
+      let nulls = 0;
+      const uniqueValues = new Set();
+      newSampleRows.forEach(r => {
+        const v = r[colName];
+        if (v === undefined || v === null || String(v).trim() === '' || String(v).toLowerCase() === 'null') {
+          nulls++;
+        } else {
+          uniqueValues.add(v);
+        }
+      });
+      return {
+        ...col,
+        nullPercent: (nulls / newSampleRows.length) * 100,
+        uniqueCount: uniqueValues.size
+      };
+    });
+
+    return {
+      ...ds,
+      rows: newSampleRows.length,
+      columnsInfo: newColumnsInfo,
+      sampleRows: newSampleRows,
+      name: `${ds.name.split('.')[0]}_aggregated`
+    };
+  };
+
+  // Initialize DQI States
+  useEffect(() => {
+    if (page === 3 && dataset) {
+      const currentDatasetId = dataset.id || dataset.name;
+      const needsInit = !dqiDataset || 
+        dqiInitializedFor.datasetId !== currentDatasetId ||
+        dqiInitializedFor.target !== targetColumn ||
+        dqiInitializedFor.dateCol !== dateColumn;
+
+      if (needsInit) {
+        const copy = JSON.parse(JSON.stringify(dataset));
+        const allCols = copy.columnsInfo.map(c => c.name);
+        const profile = datasetProfiler.profile(copy, allCols, targetColumn, dateColumn);
+        const sortedDqiDataset = {
+          ...copy,
+          sampleRows: profile.sortedRows
+        };
+        setDqiDataset(sortedDqiDataset);
+        console.log("PROFILER FOUND ANOMALIES COUNT:", profile.anomalies.length, profile.anomalies);
+        setDqiAnomalyLog(profile.anomalies);
+        setDqiInitializedFor({
+          datasetId: currentDatasetId,
+          target: targetColumn,
+          dateCol: dateColumn
+        });
+        setDqiAuditTrail([{ timestamp: new Date().toLocaleTimeString(), action: 'Initialize', message: 'Initialized Data Quality Intelligence pipeline across all numeric features.' }]);
+      }
+    } else if (page < 3) {
+      setDqiDataset(null);
+      setDqiAnomalyLog([]);
+      setDqiAuditTrail([]);
+      setDqiInitializedFor({ datasetId: '', target: '', dateCol: '' });
+    }
+  }, [page, dataset, targetColumn, dateColumn, dqiInitializedFor, dqiDataset]);
+
+  // Sync category columns to groupByColumns whenever Page 2 groupBy changes
+  useEffect(() => {
+    if (groupByColumns.length > 0) {
+      setDqiPrimaryCategory(groupByColumns[0]);
+      if (groupByColumns.length > 1) {
+        setDqiSubgroupCategory(groupByColumns[1]);
+      } else {
+        setDqiSubgroupCategory('none');
+      }
+    } else {
+      setDqiPrimaryCategory('');
+      setDqiSubgroupCategory('none');
+    }
+  }, [groupByColumns]);
+
+  useEffect(() => {
+    if (targetColumn && dqiSelectedFeature !== targetColumn) {
+      setDqiSelectedFeature(targetColumn);
+    }
+  }, [targetColumn, page]);
+
+  const dqiChartData = useMemo(() => {
+    if (!dqiDataset || !dqiSelectedFeature) return [];
+
+    const colMeta = dqiDataset.columnsInfo.find(c => c.name === dqiSelectedFeature);
+    const isCategorical = colMeta ? colMeta.type === 'categorical' : false;
+
+    // ── CATEGORICAL: frequency distribution bar data ─────────────────
+    if (isCategorical) {
+      // Build freq map from sampleRows
+      const freqMap = {};
+      dqiDataset.sampleRows.forEach(row => {
+        const v = row[dqiSelectedFeature];
+        if (v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null') return;
+        const key = String(v).trim();
+        freqMap[key] = (freqMap[key] || 0) + 1;
+      });
+      const totalNonNull = Object.values(freqMap).reduce((s, c) => s + c, 0);
+      // Flag categories anomalous (rare) in the current anomaly log for this feature
+      const rareAnoms = new Set(
+        dqiAnomalyLog
+          .filter(a => a.feature === dqiSelectedFeature && a.type === 'Rare Category' && a.status === 'active')
+          .map(a => a.value)
+      );
+      // Sort descending by count for readability
+      return Object.entries(freqMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([catVal, count]) => ({
+          name: catVal,
+          value: count,
+          pct: totalNonNull > 0 ? ((count / totalNonNull) * 100).toFixed(1) : '0',
+          isRare: rareAnoms.has(catVal)
+        }));
+    }
+
+    // ── NUMERIC: existing time-series map aggregated to one point per period ──
+    const getDateVal = (row, col) => {
+      if (!row || !col) return '';
+      if (col === 'Combined Year + Month') {
+        return row['Combined Year + Month'] || row['Year + Month'] || '';
+      }
+      return row[col] || '';
+    };
+
+    const getYearMonthLabel = (val) => {
+      if (val === null || val === undefined) return 'Unknown';
+      const str = String(val).trim();
+      if (!str) return 'Unknown';
+
+      // Check if it's already YYYY-MM
+      if (/^\d{4}-\d{2}$/.test(str)) return str;
+
+      // Try parsing DD/MM/YYYY, DD-MM-YYYY, or DD.MM.YYYY
+      const parts = str.split(/[-/.]/);
+      if (parts.length === 3) {
+        const p0 = parseInt(parts[0], 10);
+        const p1 = parseInt(parts[1], 10);
+        const p2 = parseInt(parts[2], 10);
+        if (!isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+          if (p2 > 1000) {
+            // DD/MM/YYYY -> YYYY-MM
+            return `${p2}-${String(p1).padStart(2, '0')}`;
+          } else if (p0 > 1000) {
+            // YYYY/MM/DD -> YYYY-MM
+            return `${p0}-${String(p1).padStart(2, '0')}`;
+          }
+        }
+      }
+
+      // Try standard Date parsing
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        return `${y}-${m}`;
+      }
+
+      return str; // Fallback
+    };
+
+    // 1. Group rows by chronological period label to ensure exactly one point per period
+    const orderedPeriods = [];
+    const periodBuckets = {};
+
+    dqiDataset.sampleRows.forEach((row) => {
+      const originalIdx = row.__originalIdx;
+      const rawDate = dateColumn ? getDateVal(row, dateColumn) : '';
+      const dateVal = rawDate ? getYearMonthLabel(rawDate) : `Row ${originalIdx + 1}`;
+
+      if (!periodBuckets[dateVal]) {
+        periodBuckets[dateVal] = [];
+        orderedPeriods.push(dateVal);
+      }
+      periodBuckets[dateVal].push(row);
+    });
+
+    // 2. Map period buckets to aggregated points
+    const chartRes = orderedPeriods.map((dateVal) => {
+      const bucketRows = periodBuckets[dateVal];
+
+      // Determine aggregation method: honor custom settings from Page 2, fall back to keyword check, default to mean
+      let method = customAggMappings[dqiSelectedFeature];
+      if (!method) {
+        const nameLower = dqiSelectedFeature.toLowerCase();
+        const sumKeywords = ['count', 'volume', 'quantity', 'revenue', 'sales', 'total', 'amount', 'spend', 'cost'];
+        if (sumKeywords.some(kw => nameLower.includes(kw))) {
+          method = 'sum';
+        } else {
+          method = 'mean';
+        }
+      }
+
+      const values = bucketRows
+        .map(r => Number(r[dqiSelectedFeature]))
+        .filter(v => !isNaN(v) && v !== null && v !== undefined);
+
+      let aggregatedValue = null;
+      if (values.length > 0) {
+        if (method === 'sum') {
+          aggregatedValue = values.reduce((a, b) => a + b, 0);
+        } else if (method === 'min') {
+          aggregatedValue = Math.min(...values);
+        } else if (method === 'max') {
+          aggregatedValue = Math.max(...values);
+        } else {
+          aggregatedValue = values.reduce((a, b) => a + b, 0) / values.length;
+        }
+        aggregatedValue = Math.round(aggregatedValue * 100) / 100;
+      }
+
+      // Check if this period has at least one active anomaly
+      const bucketOriginalIndices = new Set(bucketRows.map(r => r.__originalIdx));
+      const activeAnoms = dqiAnomalyLog.filter(a =>
+        a.feature === dqiSelectedFeature &&
+        a.status === 'active' &&
+        bucketOriginalIndices.has(a.index)
+      );
+
+      const hasAnomaly = activeAnoms.length > 0;
+
+      return {
+        name: dateVal,
+        value: aggregatedValue,
+        anomaly: hasAnomaly ? aggregatedValue : null,
+        anomalyCount: activeAnoms.length,
+        anomalies: activeAnoms,
+        rowLabel: bucketRows.length === 1 ? `Row ${bucketRows[0].__originalIdx + 1}` : `${bucketRows.length} rows aggregated (${method})`
+      };
+    });
+
+    console.log("RENDER BOUNDARY FIRST 10:", chartRes.slice(0, 10).map(r => ({ name: r.name, value: r.value, anomalyCount: r.anomalyCount })));
+    console.log("RENDER BOUNDARY LAST 10:", chartRes.slice(-10).map(r => ({ name: r.name, value: r.value, anomalyCount: r.anomalyCount })));
+    return chartRes;
+  }, [dqiDataset, dqiSelectedFeature, dqiAnomalyLog, dateColumn, customAggMappings]);
+
+
+
+  const datasetProfiler = {
+    profile: (ds, features, targetCol, dateCol, anomalyLogOverrides = null) => {
+      const getDateVal = (row, col) => {
+        if (!row || !col) return '';
+        if (col === 'Combined Year + Month') {
+          return row['Combined Year + Month'] || row['Year + Month'] || '';
+        }
+        return row[col] || '';
+      };
+      if (!ds || !ds.sampleRows || ds.sampleRows.length === 0) {
+        return {
+          sortedRows: [],
+          anomalies: [],
+          pillarScores: { granularity: 0, historicity: 0, value: 0, readiness: 0 }
+        };
+      }
+
+      // Map rows with their original index to preserve alignment for cleanups
+      let indexedRows = ds.sampleRows.map((row, idx) => ({
+        ...row,
+        __originalIdx: row.__originalIdx !== undefined ? row.__originalIdx : idx
+      }));
+
+      // NOTE: ds.sampleRows is already sorted chronologically ascending by addYearMonthVirtualColumn
+      // at dataset load time. The profiler trusts that order and does NOT re-sort, to avoid
+      // divergence between the chart's render order and the anomaly index positions.
+      // The only sort that matters is the one at line ~1595 inside addYearMonthVirtualColumn.
+
+      const sortedRows = indexedRows;
+      const anomalies = [];
+
+      features.forEach(colName => {
+        const colMeta = ds.columnsInfo.find(c => c.name === colName);
+        const isNumeric = colMeta ? colMeta.type === 'numeric' : true;
+
+        // Skip date-related index columns, seasonality columns, or ID keys regardless of type
+        const nameLower = colName.toLowerCase();
+        if (
+          colName === dateCol ||
+          nameLower.includes('year') ||
+          nameLower.includes('month') ||
+          nameLower.includes('day') ||
+          nameLower.includes('date') ||
+          nameLower.includes('timestamp') ||
+          nameLower.includes('season') ||
+          nameLower === 'id' ||
+          nameLower.includes('_id')
+        ) {
+          return;
+        }
+
+        const vals = sortedRows.map(r => r[colName]);
+        const rowDates = sortedRows.map((r, idx) => getDateVal(r, dateCol) || `Row ${r.__originalIdx + 1}`);
+
+        if (!isNumeric) {
+          // ── CATEGORICAL ANOMALY CHECKS ──────────────────────────────
+
+          // Build frequency map across all rows
+          const freqMap = {};
+          const totalNonNull = vals.filter(v =>
+            v !== null && v !== undefined && String(v).trim() !== '' && String(v).toLowerCase() !== 'null'
+          ).length;
+
+          vals.forEach(v => {
+            if (v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null') return;
+            const key = String(v).trim();
+            freqMap[key] = (freqMap[key] || 0) + 1;
+          });
+
+          // Shared catFreqMap attached to every anomaly for this column so the chart can use it
+          const catFreqMap = { ...freqMap };
+
+          // C1. Rare Category: frequency < 1% of non-null rows AND count <= 3
+          if (totalNonNull > 0) {
+            Object.entries(freqMap).forEach(([catVal, count]) => {
+              const pct = count / totalNonNull;
+              if (pct < 0.01 && count <= 3) {
+                // Find first occurrence row for location reference
+                const firstIdx = vals.findIndex(v => String(v).trim() === catVal);
+                const originalIdx = firstIdx >= 0 ? sortedRows[firstIdx].__originalIdx : 0;
+                const rowDate = firstIdx >= 0 ? rowDates[firstIdx] : 'Unknown';
+                anomalies.push({
+                  id: `anom_${colName}_rare_${catVal}`,
+                  feature: colName,
+                  index: originalIdx,
+                  rowLabel: rowDate,
+                  value: catVal,
+                  count,
+                  pct: (pct * 100).toFixed(2),
+                  type: 'Rare Category',
+                  severity: 'Medium',
+                  detectedAt: new Date().toLocaleTimeString(),
+                  recommendedAction: 'Replace with column mode or "Unknown"',
+                  status: 'active',
+                  actionReason: '',
+                  catFreqMap,
+                  isCategoric: true
+                });
+              }
+            });
+          }
+
+          // C2. Dominant Monoculture: one value > 95% of non-null rows
+          if (totalNonNull > 0) {
+            const sorted = Object.entries(freqMap).sort((a, b) => b[1] - a[1]);
+            if (sorted.length > 0) {
+              const [topVal, topCount] = sorted[0];
+              if (topCount / totalNonNull > 0.95) {
+                const firstIdx = vals.findIndex(v => String(v).trim() === topVal);
+                const originalIdx = firstIdx >= 0 ? sortedRows[firstIdx].__originalIdx : 0;
+                anomalies.push({
+                  id: `anom_${colName}_mono`,
+                  feature: colName,
+                  index: originalIdx,
+                  rowLabel: `Column-level`,
+                  value: topVal,
+                  count: topCount,
+                  pct: ((topCount / totalNonNull) * 100).toFixed(1),
+                  type: 'Dominant Monoculture',
+                  severity: 'Low',
+                  detectedAt: new Date().toLocaleTimeString(),
+                  recommendedAction: 'Review for near-zero entropy; consider dropping column',
+                  status: 'active',
+                  actionReason: '',
+                  catFreqMap,
+                  isCategoric: true
+                });
+              }
+            }
+          }
+
+          // C3. Null Spike (Categorical) — order-sensitive, same logic as numeric
+          let consecutiveNonNullCat = 0;
+          vals.forEach((v, idx) => {
+            const rowDate = rowDates[idx];
+            const originalIdx = sortedRows[idx].__originalIdx;
+            const isNull = v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null';
+            if (isNull) {
+              if (consecutiveNonNullCat >= 5) {
+                anomalies.push({
+                  id: `anom_${colName}_catnull_${originalIdx}`,
+                  feature: colName,
+                  index: originalIdx,
+                  rowLabel: rowDate,
+                  value: 'NaN/Null',
+                  type: 'Sudden Null Spike',
+                  severity: 'High',
+                  detectedAt: new Date().toLocaleTimeString(),
+                  recommendedAction: 'Impute using column mode or forward fill',
+                  status: 'active',
+                  actionReason: '',
+                  catFreqMap,
+                  isCategoric: true
+                });
+              }
+              consecutiveNonNullCat = 0;
+            } else {
+              consecutiveNonNullCat++;
+            }
+          });
+
+          return; // done with this categorical column
+        }
+
+
+
+        // A. ORDER-INDEPENDENT: Z-score & IQR Outliers
+        const numsWithIdx = vals.map((v, idx) => ({ val: Number(v), original: v, sortedIdx: idx, originalIdx: sortedRows[idx].__originalIdx }))
+          .filter(item => item.original !== null && item.original !== undefined && String(item.original).trim() !== '' && !isNaN(item.val));
+
+        const nums = numsWithIdx.map(item => item.val);
+
+        let mean = 0, std = 0, Q1 = 0, Q3 = 0, IQR = 0;
+        if (nums.length > 5) {
+          const sum = nums.reduce((a, b) => a + b, 0);
+          mean = sum / nums.length;
+          const sqDiffSum = nums.reduce((a, b) => a + Math.pow(b - mean, 2), 0);
+          std = Math.sqrt(sqDiffSum / nums.length);
+
+          const sortedNums = [...nums].sort((a, b) => a - b);
+          Q1 = sortedNums[Math.floor(sortedNums.length * 0.25)];
+          Q3 = sortedNums[Math.floor(sortedNums.length * 0.75)];
+          IQR = Q3 - Q1;
+        }
+
+        const thresholdStd = Math.max(std, 0.05 * Math.abs(mean), 0.01);
+        const thresholdIQR = Math.max(IQR, 0.05 * Math.abs(Q1 || mean), 0.01);
+
+        numsWithIdx.forEach(item => {
+          const v = item.val;
+          const idx = item.originalIdx;
+          const rowDate = rowDates[item.sortedIdx];
+
+          if (std > 0) {
+            const z = (v - mean) / thresholdStd;
+            if (Math.abs(z) > 3) {
+              anomalies.push({
+                id: `anom_${colName}_z_${idx}`,
+                feature: colName,
+                index: idx,
+                rowLabel: rowDate,
+                value: item.original,
+                type: 'Z-Score Outlier',
+                severity: 'High',
+                detectedAt: new Date().toLocaleTimeString(),
+                recommendedAction: 'Impute using column mean/median',
+                status: 'active',
+                actionReason: ''
+              });
+              return;
+            }
+          }
+
+          if (IQR > 0) {
+            if (v < Q1 - 1.5 * thresholdIQR || v > Q3 + 1.5 * thresholdIQR) {
+              anomalies.push({
+                id: `anom_${colName}_iqr_${idx}`,
+                feature: colName,
+                index: idx,
+                rowLabel: rowDate,
+                value: item.original,
+                type: 'IQR Fence Breach',
+                severity: 'Medium',
+                detectedAt: new Date().toLocaleTimeString(),
+                recommendedAction: 'Impute using median value',
+                status: 'active',
+                actionReason: ''
+              });
+            }
+          }
+        });
+
+        // B. ORDER-SENSITIVE: Consecutive null spikes and flatline sequence checks
+        let consecutiveNonNull = 0;
+        vals.forEach((v, idx) => {
+          const rowDate = rowDates[idx];
+          const originalIdx = sortedRows[idx].__originalIdx;
+          const isNull = v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null';
+          if (isNull) {
+            if (consecutiveNonNull >= 5) {
+              anomalies.push({
+                id: `anom_${colName}_null_${originalIdx}`,
+                feature: colName,
+                index: originalIdx,
+                rowLabel: rowDate,
+                value: 'NaN/Null',
+                type: 'Sudden Null Spike',
+                severity: 'High',
+                detectedAt: new Date().toLocaleTimeString(),
+                recommendedAction: 'Impute using forward fill or median',
+                status: 'active',
+                actionReason: ''
+              });
+            }
+            consecutiveNonNull = 0;
+          } else {
+            consecutiveNonNull++;
+          }
+        });
+
+        let consecutiveRep = 1;
+        let repVal = vals[0];
+        for (let i = 1; i < vals.length; i++) {
+          const v = vals[i];
+          const rowDate = rowDates[i];
+          const originalIdx = sortedRows[i].__originalIdx;
+          const isNull = v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null';
+          if (!isNull && v === repVal) {
+            consecutiveRep++;
+            if (consecutiveRep === 5) {
+              anomalies.push({
+                id: `anom_${colName}_flat_${originalIdx}`,
+                feature: colName,
+                index: originalIdx,
+                rowLabel: rowDate,
+                value: v,
+                type: 'Flatline Sequence',
+                severity: 'Medium',
+                detectedAt: new Date().toLocaleTimeString(),
+                recommendedAction: 'Verify sensor/data ingestion stability',
+                status: 'active',
+                actionReason: ''
+              });
+            }
+          } else {
+            consecutiveRep = 1;
+            repVal = v;
+          }
+        }
+      });
+
+      // 3. Compute Pillar Scores using the new enterprise-grade Readiness Calculator
+      const activeAnomalyLog = anomalyLogOverrides || anomalies;
+      const activeAnomalies = activeAnomalyLog.filter(a => a.status === 'active');
+
+      const readinessResult = calculateReadiness(
+        sortedRows,
+        features,
+        targetCol,
+        dateCol,
+        activeAnomalies,
+        goal,
+        {
+          referenceDate: new Date('2026-06-29') // Keep reference date consistent with baseline
+        }
+      );
+
+      return {
+        sortedRows,
+        anomalies,
+        pillarScores: {
+          granularity: readinessResult.scores.granularity,
+          historicity: readinessResult.scores.historicity,
+          value: readinessResult.scores.valueScore,
+          readiness: readinessResult.scores.overallReadiness
+        }
+      };
+    }
+  };
+
+  const dqiAggregatedDataset = useMemo(() => {
+    if (!dqiDataset) return null;
+    if (applyAggregation && groupByColumns.length > 0) {
+      return aggregateDataset(dqiDataset, groupByColumns, customAggMappings);
+    }
+    return dqiDataset;
+  }, [dqiDataset, applyAggregation, groupByColumns, customAggMappings]);
+
+  const activeDataset = useMemo(() => {
+    return dqiAggregatedDataset || dqiDataset || dataset;
+  }, [dqiAggregatedDataset, dqiDataset, dataset]);
+
+  const dqiReport = useMemo(() => {
+    if (!activeDataset) return { granularity: 0, historicity: 0, value: 0, readiness: 0 };
+    const profile = datasetProfiler.profile(activeDataset, selectedFeaturesList, targetColumn, dateColumn, dqiAnomalyLog);
+    return profile.pillarScores;
+  }, [activeDataset, dqiAnomalyLog, selectedFeaturesList, targetColumn, dateColumn]);
+
+  const dqiReadinessScore = dqiReport?.readiness || 0;
+
+  // ── CATEGORY TREND BREAKDOWN ─────────────────────────────────────────────
+  // 12-color palette for multi-line category chart
+  const CAT_PALETTE = [
+    '#6366f1', '#f59e0b', '#10b981', '#ef4444', '#3b82f6',
+    '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4',
+    '#84cc16', '#e11d48'
+  ];
+
+  // Produces pivoted chart rows: [{name: 'YYYY-MM', 'ModelA|North': 12.3, 'ModelB|South': 9.1, ...}]
+  const dqiCategoryChartData = useMemo(() => {
+    if (!dqiDataset || !targetColumn || dqiCategoryColumns.length === 0) return { rows: [], keys: [] };
+
+    const rows = dqiDataset.sampleRows;
+
+    // Compose the key for each row
+    const getCompositeKey = (row) =>
+      dqiCategoryColumns.map(col => {
+        const v = row[col];
+        return v === null || v === undefined ? 'N/A' : String(v).trim();
+      }).join(' | ');
+
+    // Build date label helper (reuse same logic as dqiChartData)
+    const getDateLabel = (row) => {
+      if (!dateColumn) return `Row ${row.__originalIdx + 1}`;
+      let raw = '';
+      if (dateColumn === 'Combined Year + Month') {
+        raw = row['Combined Year + Month'] || row['Year + Month'] || '';
+      } else {
+        raw = row[dateColumn] || '';
+      }
+      if (!raw) return `Row ${row.__originalIdx + 1}`;
+      const str = String(raw).trim();
+      if (/^\d{4}-\d{2}$/.test(str)) return str;
+      const parts = str.split(/[-/.]/);
+      if (parts.length === 3) {
+        const p0 = parseInt(parts[0], 10), p1 = parseInt(parts[1], 10), p2 = parseInt(parts[2], 10);
+        if (!isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+          if (p2 > 1000) return `${p2}-${String(p1).padStart(2, '0')}`;
+          if (p0 > 1000) return `${p0}-${String(p1).padStart(2, '0')}`;
+        }
+      }
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return str;
+    };
+
+    // Count rows per composite key to find top-12 by volume
+    const keyCounts = {};
+    rows.forEach(row => {
+      const k = getCompositeKey(row);
+      keyCounts[k] = (keyCounts[k] || 0) + 1;
+    });
+    const top12Keys = Object.entries(keyCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([k]) => k);
+
+    // Pivot: for each unique date label, collect target values per key
+    const dateMap = {}; // { dateLabel: { compositeKey: [values] } }
+    const dateOrder = []; // maintain insertion order (already chronologically sorted)
+    rows.forEach(row => {
+      const key = getCompositeKey(row);
+      if (!top12Keys.includes(key)) return;
+      const dateLabel = getDateLabel(row);
+      const targetVal = Number(row[targetColumn]);
+      if (!dateMap[dateLabel]) {
+        dateMap[dateLabel] = {};
+        dateOrder.push(dateLabel);
+      }
+      if (!dateMap[dateLabel][key]) dateMap[dateLabel][key] = [];
+      if (!isNaN(targetVal)) dateMap[dateLabel][key].push(targetVal);
+    });
+
+    // Collapse each date bucket: average values per key for that period
+    const chartRows = dateOrder.map(dateLabel => {
+      const entry = { name: dateLabel };
+      top12Keys.forEach(key => {
+        const vals = dateMap[dateLabel][key];
+        entry[key] = vals && vals.length > 0
+          ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100
+          : null;
+      });
+      return entry;
+    });
+
+    return { rows: chartRows, keys: top12Keys };
+  }, [dqiDataset, targetColumn, dateColumn, dqiCategoryColumns]);
+
+  // Per-composite-key independent anomaly detection (Z-score + IQR + null-spike + flatline)
+  const dqiCategoryAnomalyMap = useMemo(() => {
+    if (!dqiDataset || !targetColumn || dqiCategoryColumns.length === 0) return {};
+
+    const rows = dqiDataset.sampleRows;
+    const getCompositeKey = (row) =>
+      dqiCategoryColumns.map(col => {
+        const v = row[col];
+        return v === null || v === undefined ? 'N/A' : String(v).trim();
+      }).join(' | ');
+
+    // Group rows by composite key (already sorted chronologically)
+    const groups = {};
+    rows.forEach(row => {
+      const k = getCompositeKey(row);
+      if (!groups[k]) groups[k] = [];
+      groups[k].push(row);
+    });
+
+    const result = {};
+    const targetLower = (targetColumn || '').toLowerCase();
+    const isSeasonTarget = targetLower.includes('season');
+
+    Object.entries(groups).forEach(([key, groupRows]) => {
+      const vals = groupRows.map(r => r[targetColumn]);
+      const anomalies = [];
+
+      // Z-score + IQR (order-independent)
+      if (!isSeasonTarget) {
+        const numsWithIdx = vals
+          .map((v, i) => ({ val: Number(v), original: v, idx: i, originalIdx: groupRows[i].__originalIdx }))
+          .filter(item => item.original !== null && item.original !== undefined && String(item.original).trim() !== '' && !isNaN(item.val));
+        const nums = numsWithIdx.map(x => x.val);
+
+        let mean = 0, std = 0, Q1 = 0, Q3 = 0, IQR = 0;
+        if (nums.length > 5) {
+          mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+          std = Math.sqrt(nums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / nums.length);
+          const sorted = [...nums].sort((a, b) => a - b);
+          Q1 = sorted[Math.floor(sorted.length * 0.25)];
+          Q3 = sorted[Math.floor(sorted.length * 0.75)];
+          IQR = Q3 - Q1;
+        }
+
+        const thresholdStd = Math.max(std, 0.05 * Math.abs(mean), 0.01);
+        const thresholdIQR = Math.max(IQR, 0.05 * Math.abs(Q1 || mean), 0.01);
+
+        numsWithIdx.forEach(item => {
+          if (std > 0 && Math.abs((item.val - mean) / thresholdStd) > 3) {
+            anomalies.push({ originalIdx: item.originalIdx, value: item.original, type: 'Z-Score Outlier', severity: 'High' });
+            return;
+          }
+          if (IQR > 0 && (item.val < Q1 - 1.5 * thresholdIQR || item.val > Q3 + 1.5 * thresholdIQR)) {
+            anomalies.push({ originalIdx: item.originalIdx, value: item.original, type: 'IQR Fence Breach', severity: 'Medium' });
+          }
+        });
+      }
+
+      // Null spike (order-sensitive)
+      let consec = 0;
+      vals.forEach((v, i) => {
+        const isNull = v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null';
+        if (isNull) {
+          if (consec >= 5) anomalies.push({ originalIdx: groupRows[i].__originalIdx, value: 'NaN/Null', type: 'Sudden Null Spike', severity: 'High' });
+          consec = 0;
+        } else { consec++; }
+      });
+
+      // Flatline (order-sensitive)
+      let rep = 1, repVal = vals[0];
+      for (let i = 1; i < vals.length; i++) {
+        const v = vals[i];
+        const isNull = v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null';
+        if (!isNull && v === repVal) {
+          rep++;
+          if (rep === 5) anomalies.push({ originalIdx: groupRows[i].__originalIdx, value: v, type: 'Flatline Sequence', severity: 'Medium' });
+        } else { rep = 1; repVal = v; }
+      }
+
+      result[key] = anomalies;
+    });
+
+    return result;
+  }, [dqiDataset, targetColumn, dqiCategoryColumns]);
+
+
+
+  const handleQuarantineAnomaly = (anomaly) => {
+    if (!dqiDataset) return;
+    const newRows = dqiDataset.sampleRows.filter(row => row.__originalIdx !== anomaly.index);
+    const updatedDataset = {
+      ...dqiDataset,
+      rows: newRows.length,
+      sampleRows: newRows
+    };
+    const auditMsg = `Quarantined record at row index ${anomaly.index + 1} for feature '${anomaly.feature}' due to ${anomaly.type}`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Quarantine', message: auditMsg }]);
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.id === anomaly.id || a.index === anomaly.index) {
+        return { ...a, status: 'quarantined' };
+      }
+      return a;
+    }));
+    setDqiDataset(updatedDataset);
+  };
+
+  const handleImputeAnomaly = (anomaly) => {
+    if (!dqiDataset) return;
+    const colName = anomaly.feature;
+    const colMeta = dqiDataset.columnsInfo.find(c => c.name === colName);
+    const colType = colMeta ? colMeta.type : 'numeric';
+    let replacementValue;
+    if (colType === 'numeric') {
+      const vals = dqiDataset.sampleRows
+        .map(r => Number(r[colName]))
+        .filter(v => !isNaN(v) && v !== null && v !== undefined);
+      if (vals.length > 0) {
+        vals.sort((a, b) => a - b);
+        replacementValue = vals[Math.floor(vals.length / 2)];
+      } else {
+        replacementValue = 0;
+      }
+    } else {
+      const counts = {};
+      dqiDataset.sampleRows.forEach(r => {
+        const v = r[colName];
+        if (v !== null && v !== undefined && String(v).trim() !== '') {
+          counts[v] = (counts[v] || 0) + 1;
+        }
+      });
+      const sortedModes = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+      replacementValue = sortedModes.length > 0 ? sortedModes[0][0] : 'Mode';
+    }
+    const newRows = dqiDataset.sampleRows.map((row) => {
+      if (row.__originalIdx === anomaly.index) {
+        return { ...row, [colName]: replacementValue };
+      }
+      return row;
+    });
+    const updatedDataset = {
+      ...dqiDataset,
+      sampleRows: newRows
+    };
+    const auditMsg = `Imputed anomaly in feature '${colName}' at row index ${anomaly.index + 1} with value: '${replacementValue}'`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Impute', message: auditMsg }]);
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.id === anomaly.id) {
+        return { ...a, status: 'imputed' };
+      }
+      return a;
+    }));
+    setDqiDataset(updatedDataset);
+  };
+
+  const handleAlertAnomaly = (anomaly) => {
+    const auditMsg = `Raised alert notification for feature '${anomaly.feature}' at row index ${anomaly.index + 1} (${anomaly.type})`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Alert', message: auditMsg }]);
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.id === anomaly.id) {
+        return { ...a, status: 'alerted' };
+      }
+      return a;
+    }));
+  };
+  const handleIgnoreAnomaly = (anomaly, reason) => {
+    const auditMsg = `Ignored anomaly in feature '${anomaly.feature}' at row index ${anomaly.index + 1}. Reason: ${reason || 'Not specified'}`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Ignore', message: auditMsg }]);
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.id === anomaly.id) {
+        return { ...a, status: 'ignored', actionReason: reason };
+      }
+      return a;
+    }));
+  };
+
+  const handleImputeAllAnomalies = () => {
+    if (!dqiDataset) return;
+    const activeAnoms = dqiAnomalyLog.filter(a => a.status === 'active');
+    if (activeAnoms.length === 0) return;
+
+    let updatedRows = [...dqiDataset.sampleRows];
+    const replacementMap = {};
+
+    activeAnoms.forEach(anom => {
+      const colName = anom.feature;
+      if (replacementMap[colName] === undefined) {
+        const colMeta = dqiDataset.columnsInfo.find(c => c.name === colName);
+        const colType = colMeta ? colMeta.type : 'numeric';
+        if (colType === 'numeric') {
+          const vals = dqiDataset.sampleRows
+            .map(r => Number(r[colName]))
+            .filter(v => !isNaN(v) && v !== null && v !== undefined);
+          if (vals.length > 0) {
+            vals.sort((a, b) => a - b);
+            replacementMap[colName] = vals[Math.floor(vals.length / 2)];
+          } else {
+            replacementMap[colName] = 0;
+          }
+        } else {
+          const counts = {};
+          dqiDataset.sampleRows.forEach(r => {
+            const v = r[colName];
+            if (v !== null && v !== undefined && String(v).trim() !== '') {
+              counts[v] = (counts[v] || 0) + 1;
+            }
+          });
+          const sortedModes = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+          replacementMap[colName] = sortedModes.length > 0 ? sortedModes[0][0] : 'Mode';
+        }
+      }
+
+      const replacementValue = replacementMap[colName];
+      const targetRowIdx = updatedRows.findIndex(r => r.__originalIdx === anom.index);
+      if (targetRowIdx !== -1) {
+        updatedRows[targetRowIdx] = {
+          ...updatedRows[targetRowIdx],
+          [colName]: replacementValue
+        };
+      }
+    });
+
+    const updatedDataset = {
+      ...dqiDataset,
+      sampleRows: updatedRows
+    };
+
+    const auditMsg = `Bulk imputed ${activeAnoms.length} active anomalies across features.`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Bulk Impute', message: auditMsg }]);
+
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.status === 'active') {
+        return { ...a, status: 'imputed' };
+      }
+      return a;
+    }));
+
+    setDqiDataset(updatedDataset);
+  };
+
+  const handleQuarantineAllAnomalies = () => {
+    if (!dqiDataset) return;
+    const activeAnoms = dqiAnomalyLog.filter(a => a.status === 'active');
+    if (activeAnoms.length === 0) return;
+
+    const indicesToQuarantine = new Set(activeAnoms.map(a => a.index));
+    const newRows = dqiDataset.sampleRows.filter(row => !indicesToQuarantine.has(row.__originalIdx));
+    const updatedDataset = {
+      ...dqiDataset,
+      rows: newRows.length,
+      sampleRows: newRows
+    };
+
+    const auditMsg = `Bulk quarantined ${indicesToQuarantine.size} record rows containing active anomalies.`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Bulk Quarantine', message: auditMsg }]);
+
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (indicesToQuarantine.has(a.index)) {
+        return { ...a, status: 'quarantined' };
+      }
+      return a;
+    }));
+
+    setDqiDataset(updatedDataset);
+  };
+
+  const handleIgnoreAllAnomalies = (reason) => {
+    const activeAnoms = dqiAnomalyLog.filter(a => a.status === 'active');
+    if (activeAnoms.length === 0) return;
+
+    const auditMsg = `Bulk ignored ${activeAnoms.length} active anomalies. Reason: ${reason || 'Not specified'}`;
+    setDqiAuditTrail(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), action: 'Bulk Ignore', message: auditMsg }]);
+
+    setDqiAnomalyLog(prev => prev.map(a => {
+      if (a.status === 'active') {
+        return { ...a, status: 'ignored', actionReason: reason };
+      }
+      return a;
+    }));
+  };
+
   // Navigations & validations
   const isPage1Valid = advancedMode
     ? (dataset && goal && (goal === 'clustering' ? true : (targetColumn && targetConfirmed)) && selectedModels.length > 0)
     : (dataset && targetColumn && targetColumn !== '' && goal);
   const isPage2Valid = selectedFeaturesList.length > 0 && (splitMethod !== 'chronological' || dateColumn);
+  const isPage3Valid = true;
 
   const handleNextPage = () => {
     if (page === 1 && isPage1Valid) {
-      if (advancedMode) {
-        setPage(2);
-      } else {
-        handleStartTraining();
-      }
+      setPage(2);
     } else if (page === 2 && isPage2Valid) {
+      setPage(3);
+    } else if (page === 3 && isPage3Valid) {
       handleStartTraining();
     }
   };
 
   const handlePrevPage = () => {
-    if (page === 3 && !advancedMode) {
-      setPage(1);
-    } else if (page > 1) {
+    if (page > 1) {
       setPage(page - 1);
     }
   };
@@ -1894,14 +3029,14 @@ export default function App() {
   };
 
   const forecastData = useMemo(() => {
-    if (!dataset || goal !== 'forecasting' || !targetColumn || !dateColumn) return [];
-    
+    if (!activeDataset || goal !== 'forecasting' || !targetColumn || !dateColumn) return [];
+
     // Sort rows chronologically
-    let sortedRows = [...dataset.sampleRows];
+    let sortedRows = [...activeDataset.sampleRows];
     if (dateColumn === 'Combined Year + Month') {
-      const yCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('year'))?.name;
-      const mCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('month'))?.name;
-      
+      const yCol = activeDataset.columnsInfo.find(c => c.name.toLowerCase().includes('year'))?.name;
+      const mCol = activeDataset.columnsInfo.find(c => c.name.toLowerCase().includes('month'))?.name;
+
       const getMonthNumeric = (mVal) => {
         if (mVal === null || mVal === undefined) return 1;
         const mStr = String(mVal).trim().toLowerCase();
@@ -1921,7 +3056,7 @@ export default function App() {
         const yA = Number(a[yCol]) || 0;
         const yB = Number(b[yCol]) || 0;
         if (yA !== yB) return yA - yB;
-        
+
         const mA = getMonthNumeric(a[mCol]);
         const mB = getMonthNumeric(b[mCol]);
         return mA - mB;
@@ -1945,7 +3080,7 @@ export default function App() {
     }
 
     const targetValues = sortedRows.map(r => Number(r[targetColumn])).filter(v => !isNaN(v));
-    
+
     let dates;
     if (dateColumn === 'Combined Year + Month') {
       const yCol = dataset.columnsInfo.find(c => c.name.toLowerCase().includes('year'))?.name;
@@ -1971,14 +3106,14 @@ export default function App() {
     } else {
       dates = sortedRows.map(r => String(r[dateColumn] || ''));
     }
-    
+
     const histCount = Math.min(targetValues.length, 60);
     const startIndex = targetValues.length - histCount;
     const historicalValues = targetValues.slice(startIndex);
     const historicalDates = dates.slice(startIndex);
-    
+
     const chartData = [];
-    
+
     for (let i = 0; i < histCount; i++) {
       chartData.push({
         period: historicalDates[i] || `t - ${histCount - 1 - i}`,
@@ -1987,19 +3122,19 @@ export default function App() {
         range: null
       });
     }
-    
+
     const lastHistVal = historicalValues[historicalValues.length - 1] || 100;
-    
+
     const trendSpan = Math.min(historicalValues.length, 10);
     let slope = 0;
     if (trendSpan > 1) {
       const last10 = historicalValues.slice(-trendSpan);
       slope = (last10[last10.length - 1] - last10[0]) / (trendSpan - 1);
     }
-    
+
     let lastDate = new Date(historicalDates[historicalDates.length - 1] || '2026-06-15');
     if (isNaN(lastDate.getTime())) lastDate = new Date();
-    
+
     const addPeriod = (d, freq, step) => {
       const newD = new Date(d.getTime());
       if (freq === 'Daily') newD.setDate(newD.getDate() + step);
@@ -2009,17 +3144,17 @@ export default function App() {
       else if (freq === 'Yearly') newD.setFullYear(newD.getFullYear() + step);
       return newD;
     };
-    
+
     for (let step = 1; step <= forecastHorizon; step++) {
       const futureDate = addPeriod(lastDate, forecastFrequency, step);
       const futureDateStr = futureDate.toISOString().split('T')[0];
-      
+
       const seasonComponent = Math.sin((step * 2 * Math.PI) / 12) * (lastHistVal * 0.1);
       const noise = (Math.random() - 0.5) * (lastHistVal * 0.02);
-      
+
       const forecastVal = Math.max(0, lastHistVal + slope * step + seasonComponent + noise);
       const uncertainty = (0.05 * forecastVal + 0.02 * step * forecastVal);
-      
+
       chartData.push({
         period: futureDateStr,
         actual: null,
@@ -2030,19 +3165,19 @@ export default function App() {
         ]
       });
     }
-    
+
     return chartData;
-  }, [dataset, targetColumn, dateColumn, goal, forecastHorizon, forecastFrequency, triggerForecastUpdate]);
+  }, [activeDataset, targetColumn, dateColumn, goal, forecastHorizon, forecastFrequency, triggerForecastUpdate]);
 
   const handleRunPredictNewInput = () => {
-    if (!dataset) return;
-    
+    if (!activeDataset) return;
+
     let classes = ['Class A', 'Class B'];
     if (goal === 'classification' && targetColumn) {
-      const targetMeta = dataset.columnsInfo.find(c => c.name === targetColumn);
+      const targetMeta = activeDataset.columnsInfo.find(c => c.name === targetColumn);
       if (targetMeta) {
         const vals = new Set();
-        dataset.sampleRows.forEach(r => {
+        activeDataset.sampleRows.forEach(r => {
           if (r[targetColumn] !== null && r[targetColumn] !== undefined) {
             vals.add(String(r[targetColumn]));
           }
@@ -2054,22 +3189,22 @@ export default function App() {
     }
 
     const results = {};
-    
+
     selectedModels.forEach(modelId => {
       const modelMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
       const modelName = modelMeta ? modelMeta.name : modelId;
-      
+
       if (goal === 'classification') {
         let sum = 0;
         Object.entries(predictInputs).forEach(([k, v]) => {
           if (!isNaN(Number(v))) sum += Number(v);
           else sum += String(v).charCodeAt(0) || 0;
         });
-        
+
         const modelOffset = modelId.charCodeAt(0) || 0;
         const idx = Math.abs(Math.round(sum + modelOffset)) % classes.length;
         const predictedClass = classes[idx];
-        
+
         const probs = {};
         let total = 0;
         classes.forEach((c, i) => {
@@ -2080,11 +3215,11 @@ export default function App() {
           }
           total += probs[c];
         });
-        
+
         classes.forEach(c => {
           probs[c] = Math.round((probs[c] / total) * 100);
         });
-        
+
         results[modelId] = {
           name: modelName,
           prediction: predictedClass,
@@ -2099,17 +3234,17 @@ export default function App() {
           pred += val * corrVal;
           weightSum += Math.abs(corrVal);
         });
-        
+
         const targetMeta = dataset.columnsInfo.find(c => c.name === targetColumn);
         const targetSamples = targetMeta?.samples ? targetMeta.samples.filter(v => v !== null && v !== undefined) : [];
         const meanTarget = targetSamples.length > 0 ? targetSamples.reduce((a, b) => a + Number(b), 0) / targetSamples.length : 100;
-        
+
         let predictionVal = meanTarget + (weightSum > 0 ? (pred / weightSum) * (meanTarget * 0.25) : 0);
         if (isNaN(predictionVal)) predictionVal = 100;
-        
+
         const modelMultiplier = modelId.includes('lgbm') ? 1.01 : modelId.includes('rf') ? 0.99 : 0.97;
         const finalVal = predictionVal * modelMultiplier;
-        
+
         results[modelId] = {
           name: modelName,
           prediction: Number(finalVal.toFixed(2)),
@@ -2124,13 +3259,13 @@ export default function App() {
           const val = Number(predictInputs[feat]) || 0;
           sum += val;
         });
-        
+
         const targetMeta = dataset.columnsInfo.find(c => c.name === targetColumn);
         const targetSamples = targetMeta?.samples ? targetMeta.samples.filter(v => v !== null && v !== undefined) : [];
         const meanTarget = targetSamples.length > 0 ? targetSamples.reduce((a, b) => a + Number(b), 0) / targetSamples.length : 100;
-        
+
         const finalVal = meanTarget + (sum !== 0 ? (sum / selectedFeaturesList.length) * 0.05 : 0);
-        
+
         results[modelId] = {
           name: modelName,
           prediction: Number(finalVal.toFixed(2)),
@@ -2146,7 +3281,7 @@ export default function App() {
         };
       }
     });
-    
+
     setPredictionResults(results);
   };
 
@@ -2182,7 +3317,7 @@ export default function App() {
     ];
 
     let currentStep = 0;
-    
+
     const runStep = () => {
       if (currentStep < steps.length) {
         setTrainingStatusText(steps[currentStep].text);
@@ -2196,7 +3331,7 @@ export default function App() {
         const results = generateMockResults();
         setTrainingResults(results);
         setIsTraining(false);
-        setPage(3);
+        setPage(4);
 
         // Persist each trained model run to SQLite history on backend
         if (results && results.models) {
@@ -2230,7 +3365,7 @@ export default function App() {
             }
           });
         }
-        
+
         // Set active prediction model
         let defaultActiveModel = '';
         if (!advancedMode && userOverrodeModel && selectedModelOverride) {
@@ -2239,9 +3374,9 @@ export default function App() {
           // Find the best model key from results among selectedModels
           defaultActiveModel = getBestModelKey(results) || selectedModels[0] || '';
         }
-         setActivePredictionModel(defaultActiveModel);
+        setActivePredictionModel(defaultActiveModel);
         setActiveDiagModel(defaultActiveModel);
-        
+
         // Keep all model results collapsed by default to save space
         setExpandedTrainedModels({});
       }
@@ -2252,6 +3387,7 @@ export default function App() {
 
   // Metrics, charts, predictions simulation
   const generateMockResults = () => {
+    // Uses the component-level activeDataset (which applies aggregation after outlier resolution)
     const trained = {};
     const comparisonRows = [];
 
@@ -2295,10 +3431,10 @@ export default function App() {
     selectedModels.forEach(modelId => {
       const modelMeta = MODEL_REGISTRY[goal].find(m => m.id === modelId);
       const mName = modelMeta ? modelMeta.name : modelId;
-      
+
       // Seed variation per model
       const multiplier = modelId.includes('xgb') || modelId.includes('lgbm') ? 1.02 : modelId.includes('rf') ? 0.99 : 0.92;
-      
+
       let metrics = {};
       let lossCurve = [];
       let featureImportances = [];
@@ -2333,7 +3469,7 @@ export default function App() {
         const rec = Math.min(0.98, Math.max(0.70, acc * 0.99 + 0.01));
         const f1 = 2 * (prec * rec) / (prec + rec);
         const auc = Math.min(0.99, acc * 1.04);
-        
+
         metrics = {
           'Accuracy': (acc * 100).toFixed(1) + '%',
           'Precision': (prec * 100).toFixed(1) + '%',
@@ -2344,7 +3480,7 @@ export default function App() {
         overallScoreBadge = `Accuracy ${(acc * 100).toFixed(1)}%`;
 
         // Confusion matrix proportions
-        const activeRows = (applyAggregation && groupByColumns.length > 0) ? estimatedOutputRows : dataset.rows;
+        const activeRows = (applyAggregation && groupByColumns.length > 0) ? estimatedOutputRows : activeDataset.rows;
         const testSize = Math.round(activeRows * (1 - splitRatio / 100));
         const tp = Math.round(testSize * 0.45 * acc);
         const tn = Math.round(testSize * 0.42 * acc);
@@ -2355,7 +3491,7 @@ export default function App() {
 
       } else if (goal === 'regression') {
         const r2 = Math.min(0.98, Math.max(0.45, 0.82 * multiplier));
-        const meanVal = dataset.sampleRows.reduce((a, b) => a + Number(b[targetColumn] || 0), 0) / dataset.sampleRows.length;
+        const meanVal = activeDataset.sampleRows.reduce((a, b) => a + Number(b[targetColumn] || 0), 0) / activeDataset.sampleRows.length;
         const mae = meanVal * 0.08 * (1.1 - r2);
         const rmse = mae * 1.25;
         const mape = 100 * 0.07 * (1.1 - r2);
@@ -2382,7 +3518,7 @@ export default function App() {
 
       } else if (goal === 'forecasting') {
         const mape = Math.min(22, Math.max(2.1, 7.5 / multiplier));
-        const meanVal = dataset.sampleRows.reduce((a, b) => a + Number(b[targetColumn] || 0), 0) / dataset.sampleRows.length;
+        const meanVal = activeDataset.sampleRows.reduce((a, b) => a + Number(b[targetColumn] || 0), 0) / activeDataset.sampleRows.length;
         const mae = meanVal * (mape / 100);
         const rmse = mae * 1.3;
 
@@ -2402,7 +3538,7 @@ export default function App() {
         : Math.min(0.98, Math.max(0.45, 0.82 * multiplier));
 
       for (let i = 0; i < testSizeCount; i++) {
-        const sourceRow = dataset.sampleRows[i % dataset.sampleRows.length];
+        const sourceRow = activeDataset.sampleRows[i % activeDataset.sampleRows.length];
         let actualVal = sourceRow[targetColumn] || '';
         let predictedVal = '';
         let correct = '';
@@ -2536,12 +3672,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors duration-200 flex flex-col">
-      
+
       {/* ==========================================
           GLOBAL TOP NAVIGATION BAR
          ========================================== */}
       <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-6 py-3 flex items-center justify-between">
-        
+
         {/* Logo & Platform Info */}
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-md">
@@ -2549,33 +3685,72 @@ export default function App() {
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <span className="font-bold text-slate-800 dark:text-slate-100 text-base tracking-tight">ML Playground</span>
-              <span className="text-[10px] px-1.5 py-0.5 font-bold uppercase rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-500 border border-indigo-100 dark:border-indigo-900">v2.0</span>
+              <span className="font-bold text-slate-800 dark:text-slate-100 text-base tracking-tight">EY ML Playground</span>
+              {/* <span className="text-[10px] px-1.5 py-0.5 font-bold uppercase rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-500 border border-indigo-100 dark:border-indigo-900">v2.0</span> */}
             </div>
           </div>
         </div>
 
         {/* Wizard Progress Control */}
-        <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/80 rounded-full px-4 py-1.5 shadow-sm text-xs font-semibold">
-          <button 
+        <div className="flex items-center space-x-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/80 rounded-2xl px-3 py-1 shadow-sm text-xs font-semibold">
+          <button
             onClick={handlePrevPage}
             disabled={page === 1}
-            className={`flex items-center space-x-1 pr-2 border-r border-slate-200 dark:border-slate-700 transition ${page === 1 ? 'opacity-35 cursor-not-allowed' : 'hover:text-indigo-500 text-slate-600 dark:text-slate-300'}`}
+            className={`flex items-center space-x-1.5 pr-2.5 border-r border-slate-200 dark:border-slate-700 transition cursor-pointer ${page === 1 ? 'opacity-35 cursor-not-allowed' : 'hover:text-indigo-500 text-slate-600 dark:text-slate-300'}`}
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back</span>
+            <span className="hidden md:inline">Back</span>
           </button>
 
-          <span className="px-3 text-slate-600 dark:text-slate-300">
-            {advancedMode ? `Page ${page} of 3` : `Page ${page === 3 ? 2 : 1} of 2`}
-          </span>
+          {/* Horizontal Flowchart */}
+          <div className="flex items-center space-x-1 sm:space-x-1.5 text-[9px] font-bold">
+            {[
+              { id: 1, label: 'Data Setup' },
+              { id: 2, label: 'Pre-process' },
+              { id: 3, label: 'Quality Audit' },
+              { id: 4, label: 'Model Testing' }
+            ].map((s, idx) => {
+              const isActive = page === s.id;
+              const isCompleted = page > s.id;
+              const isSelectable = s.id === 1 ||
+                (s.id === 2 && isPage1Valid) ||
+                (s.id === 3 && isPage1Valid && isPage2Valid) ||
+                (s.id === 4 && isPage1Valid && isPage2Valid && isPage3Valid && trainingResults);
 
-          <button 
+              let nodeStyle = 'bg-slate-100 dark:bg-slate-850 text-slate-400 border border-slate-200 dark:border-slate-800';
+              if (isActive) {
+                nodeStyle = 'bg-indigo-500 text-white border border-indigo-650 shadow-xs';
+              } else if (isCompleted) {
+                nodeStyle = 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20';
+              } else if (isSelectable) {
+                nodeStyle = 'bg-slate-100 dark:bg-slate-800 text-slate-600 hover:bg-indigo-500 hover:text-white border border-slate-200 dark:border-slate-700 cursor-pointer';
+              }
+
+              return (
+                <div key={s.id} className="flex items-center">
+                  {idx > 0 && (
+                    <div className={`w-1.5 sm:w-3.5 h-0.5 rounded mr-1.5 ${isCompleted ? 'bg-emerald-500' : isActive ? 'bg-indigo-400' : 'bg-slate-200 dark:bg-slate-800'}`} />
+                  )}
+                  <button
+                    type="button"
+                    disabled={!isSelectable}
+                    onClick={() => setPage(s.id)}
+                    className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-md transition-all duration-150 flex items-center space-x-1 text-[9px] md:text-[10px] ${nodeStyle}`}
+                  >
+                    <span className="font-mono text-[8px] sm:text-[9px] opacity-75">{s.id}</span>
+                    <span className="hidden sm:inline font-sans">{s.label}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <button
             onClick={handleNextPage}
-            disabled={page === 3 || (page === 1 && !isPage1Valid) || (page === 2 && !isPage2Valid)}
-            className={`flex items-center space-x-1 pl-2 transition ${(page === 3 || (page === 1 && !isPage1Valid) || (page === 2 && !isPage2Valid)) ? 'opacity-35 cursor-not-allowed' : 'hover:text-indigo-500 text-slate-600 dark:text-slate-300'}`}
+            disabled={page === 4 || (page === 1 && !isPage1Valid) || (page === 2 && !isPage2Valid) || (page === 3 && !isPage3Valid)}
+            className={`flex items-center space-x-1.5 pl-2.5 border-l border-slate-200 dark:border-slate-700 transition cursor-pointer ${(page === 4 || (page === 1 && !isPage1Valid) || (page === 2 && !isPage2Valid) || (page === 3 && !isPage3Valid)) ? 'opacity-35 cursor-not-allowed' : 'hover:text-indigo-500 text-slate-600 dark:text-slate-300'}`}
           >
-            <span>{(page === 2 || (page === 1 && !advancedMode)) ? 'Train' : 'Next'}</span>
+            <span className="hidden md:inline">{page === 3 ? 'Train' : 'Next'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -2584,7 +3759,7 @@ export default function App() {
         <div className="flex items-center space-x-3">
           {/* ML Inventory (Only on Page 1) */}
           {page === 1 && (
-            <button 
+            <button
               onClick={() => setIsModelInventoryOpen(true)}
               className="text-xs font-medium flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650 rounded-lg transition"
             >
@@ -2594,7 +3769,7 @@ export default function App() {
           )}
 
           {/* Data Overview (Available on all pages) */}
-          <button 
+          <button
             onClick={() => setIsDataOverviewOpen(true)}
             className="text-xs font-medium flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition"
           >
@@ -2603,7 +3778,7 @@ export default function App() {
           </button>
 
           {/* Training History (Available on all pages) */}
-          <button 
+          <button
             onClick={() => {
               fetchTrainingHistory();
               setIsTrainingHistoryOpen(true);
@@ -2616,7 +3791,7 @@ export default function App() {
 
 
           {/* Light/Dark Toggle */}
-          <button 
+          <button
             onClick={() => setDarkMode(!darkMode)}
             className="p-1.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition"
           >
@@ -2636,7 +3811,7 @@ export default function App() {
              ========================================== */}
           {page === 1 && (
             <div className="space-y-8">
-              
+
               {/* SECTION A — DATA INGESTION */}
               <section className="bg-slate-50/40 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-6">
                 <div>
@@ -2652,11 +3827,11 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {/* File Pick Area */}
                   <div className="md:col-span-2 relative border-2 border-dashed border-slate-200 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500/80 rounded-xl p-8 flex flex-col items-center justify-center text-center transition bg-white dark:bg-slate-900/50">
-                    <input 
-                      type="file" 
+                    <input
+                      type="file"
                       accept=".csv,.json,.xlsx,.xls"
                       onChange={handleCustomUpload}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     />
                     <Upload className="w-8 h-8 text-slate-400 dark:text-slate-500 mb-3" />
                     <span className="font-semibold text-sm">Drag & drop your dataset here</span>
@@ -2719,7 +3894,7 @@ export default function App() {
 
                   <div className="flex flex-row gap-3 overflow-x-auto pb-2 scrollbar-none">
                     {/* Paradigm Cards */}
-                    <button 
+                    <button
                       onClick={() => handleParadigmChange('classification')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'classification' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
@@ -2735,7 +3910,7 @@ export default function App() {
                       </div>
                     </button>
 
-                    <button 
+                    <button
                       onClick={() => handleParadigmChange('regression')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'regression' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
@@ -2751,7 +3926,7 @@ export default function App() {
                       </div>
                     </button>
 
-                    <button 
+                    <button
                       onClick={() => handleParadigmChange('clustering')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'clustering' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
@@ -2767,7 +3942,7 @@ export default function App() {
                       </div>
                     </button>
 
-                    <button 
+                    <button
                       onClick={() => handleParadigmChange('forecasting')}
                       className={`text-left p-4 border rounded-xl bg-slate-50/20 dark:bg-slate-800/10 transition hover:shadow-sm flex-1 min-w-[245px] md:min-w-0 flex flex-col justify-between min-h-[140px] ${goal === 'forecasting' ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-100 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650'}`}
                     >
@@ -2812,11 +3987,10 @@ export default function App() {
                               key={rec.column}
                               type="button"
                               onClick={() => handleTargetChange(rec.column)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${
-                                isSelected
-                                  ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
-                                  : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
-                              }`}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${isSelected
+                                ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
+                                }`}
                             >
                               <span>{rec.column}</span>
                               <span className="text-[10px] opacity-60">
@@ -2912,11 +4086,10 @@ export default function App() {
                               type="button"
                               disabled={targetConfirmed}
                               onClick={() => handleTargetChange(rec.column, rec.approach)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${
-                                isSelected
-                                  ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
-                                  : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
-                              } disabled:opacity-60 disabled:cursor-not-allowed`}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition flex items-center space-x-1.5 shadow-sm ${isSelected
+                                ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                : 'bg-white dark:bg-slate-900 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-700'
+                                } disabled:opacity-60 disabled:cursor-not-allowed`}
                             >
                               <span>{rec.column}</span>
                               <span className="text-[10px] opacity-60">
@@ -2938,42 +4111,42 @@ export default function App() {
                           <div className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-semibold text-slate-800 dark:text-slate-150 shadow-sm flex items-center min-h-[38px] select-none">
                             {targetColumn ? targetColumn : <span className="text-slate-400 dark:text-slate-600 font-medium">None Selected</span>}
                           </div>
-                          
-                           {!targetConfirmed ? (
-                             <button
-                               type="button"
-                               disabled={!targetColumn}
-                               onClick={() => {
-                                 setTargetConfirmed(true);
-                                 let recModelId = '';
-                                 if (goal === 'classification') recModelId = 'rf_class';
-                                 else if (goal === 'regression') recModelId = dataset.rows >= 500 ? 'lgbm_reg' : 'rf_reg';
-                                 else if (goal === 'forecasting') recModelId = 'prophet_time';
-                                 setSelectedModelOverride(recModelId);
-                                 setUserOverrodeModel(false);
-                                 if (!advancedMode) {
-                                   setSelectedModels(recommendedModelsList.map(m => m.id));
-                                 } else {
-                                   setSelectedModels([recModelId]);
-                                 }
-                               }}
-                               className={`text-xs px-4 py-2 font-bold border rounded-lg transition ${targetColumn ? 'bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500 shadow-sm' : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-600 dark:border-slate-800 cursor-not-allowed shadow-none'}`}
-                             >
-                               Confirm
-                             </button>
-                           ) : (
-                             <button
-                               type="button"
-                               onClick={() => {
-                                 setTargetConfirmed(false);
-                                 setSelectedModelOverride('');
-                                 setUserOverrodeModel(false);
-                               }}
-                               className="text-xs px-4 py-2 font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-655 dark:text-slate-300 rounded-lg transition shadow-sm"
-                             >
-                               Change
-                             </button>
-                           )}
+
+                          {!targetConfirmed ? (
+                            <button
+                              type="button"
+                              disabled={!targetColumn}
+                              onClick={() => {
+                                setTargetConfirmed(true);
+                                let recModelId = '';
+                                if (goal === 'classification') recModelId = 'rf_class';
+                                else if (goal === 'regression') recModelId = dataset.rows >= 500 ? 'lgbm_reg' : 'rf_reg';
+                                else if (goal === 'forecasting') recModelId = 'prophet_time';
+                                setSelectedModelOverride(recModelId);
+                                setUserOverrodeModel(false);
+                                if (!advancedMode) {
+                                  setSelectedModels(recommendedModelsList.map(m => m.id));
+                                } else {
+                                  setSelectedModels([recModelId]);
+                                }
+                              }}
+                              className={`text-xs px-4 py-2 font-bold border rounded-lg transition ${targetColumn ? 'bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500 shadow-sm' : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-600 dark:border-slate-800 cursor-not-allowed shadow-none'}`}
+                            >
+                              Confirm
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTargetConfirmed(false);
+                                setSelectedModelOverride('');
+                                setUserOverrodeModel(false);
+                              }}
+                              className="text-xs px-4 py-2 font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-655 dark:text-slate-300 rounded-lg transition shadow-sm"
+                            >
+                              Change
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -3055,13 +4228,12 @@ export default function App() {
                               <div
                                 key={model.id}
                                 onClick={() => toggleModelSelection(model.id)}
-                                className={`relative border rounded-xl p-2 cursor-pointer hover:shadow-sm transition flex flex-col justify-between h-28 ${
-                                  isSelected
-                                    ? 'border-indigo-500 bg-indigo-500/5 dark:bg-indigo-500/10'
-                                    : isRecommended
+                                className={`relative border rounded-xl p-2 cursor-pointer hover:shadow-sm transition flex flex-col justify-between h-28 ${isSelected
+                                  ? 'border-indigo-500 bg-indigo-500/5 dark:bg-indigo-500/10'
+                                  : isRecommended
                                     ? 'border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/30 dark:bg-indigo-900/10 hover:border-indigo-400'
                                     : 'border-slate-150 dark:border-slate-800 bg-slate-50/10 dark:bg-slate-800/10 opacity-75 hover:opacity-100 hover:border-slate-300 dark:hover:border-slate-600'
-                                }`}
+                                  }`}
                               >
                                 <button
                                   onClick={(e) => {
@@ -3125,10 +4297,10 @@ export default function App() {
              ========================================== */}
           {page === 2 && (
             <div className="space-y-8">
-              
+
               {/* TWO COLUMN GRID FOR FEATURES & CONFIG */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                
+
                 {/* LEFT COLUMN — FEATURE COLUMNS (8 cols) */}
                 <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/80 rounded-2xl p-6 space-y-4">
                   <div className="flex justify-between items-start">
@@ -3176,14 +4348,14 @@ export default function App() {
                                 const status = featureStatuses[col.name] || { corr: 0, warning: '' };
                                 const correlation = status.corr;
                                 const warning = status.warning;
-                                
+
                                 // Pearson visual bar configuration
                                 const absCorr = Math.min(1.0, Math.abs(correlation));
                                 const isNegative = correlation < 0;
                                 const barColor = isNegative ? 'bg-rose-400' : 'bg-indigo-500';
 
                                 return (
-                                  <tr 
+                                  <tr
                                     key={col.name}
                                     className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/10 border-b border-slate-100/50 dark:border-slate-800/20 ${isTarget ? 'bg-amber-500/5 dark:bg-amber-500/10' : isSelected ? 'text-slate-800 dark:text-slate-100' : 'opacity-60 text-slate-400'}`}
                                   >
@@ -3244,9 +4416,9 @@ export default function App() {
                                               {correlation.toFixed(2)}
                                             </span>
                                             <div className="flex-1 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden flex justify-end">
-                                              <div 
-                                                className={`h-full ${barColor}`} 
-                                                style={{ width: `${Math.round(absCorr * 100)}%` }} 
+                                              <div
+                                                className={`h-full ${barColor}`}
+                                                style={{ width: `${Math.round(absCorr * 100)}%` }}
                                               />
                                             </div>
                                             <div className="absolute right-0 bottom-full mb-1.5 hidden group-hover:block bg-slate-800 text-slate-100 text-[10px] font-medium px-2 py-1 rounded shadow-md z-10 w-44 pointer-events-none text-center">
@@ -3275,9 +4447,9 @@ export default function App() {
 
                 {/* RIGHT COLUMN — FEATURE ENGINEERING OPTIONS (5 cols) */}
                 <div className="lg:col-span-5 space-y-4">
-                  
+
                   {/* Collapsible strategies */}
-                  
+
                   {/* 1. AGGREGATION */}
                   <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden">
                     <button
@@ -3290,7 +4462,7 @@ export default function App() {
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.aggregation ? '' : 'rotate-180'}`} />
                     </button>
-                    
+
                     {!collapsedPanels.aggregation && (
                       <div className="p-4 space-y-4 animate-slide-up text-xs">
                         {/* Apply Aggregation Toggle */}
@@ -3311,8 +4483,8 @@ export default function App() {
                             {groupByColumns.map(col => (
                               <span key={col} className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-500 border border-indigo-200 dark:border-indigo-900/50 rounded-full flex items-center space-x-1">
                                 <span>{col}</span>
-                                <button 
-                                  type="button" 
+                                <button
+                                  type="button"
                                   onClick={() => removeGroupByColumn(col)}
                                   className="hover:text-indigo-700 text-slate-400 font-bold"
                                 >
@@ -3324,7 +4496,7 @@ export default function App() {
                               <span className="text-[10px] text-slate-400 italic">No columns selected for grouping</span>
                             )}
                           </div>
-                          
+
                           {/* Searchable Dropdown Selector */}
                           <div className="relative">
                             <input
@@ -3337,8 +4509,8 @@ export default function App() {
                             />
                             {isGroupByDropdownOpen && (
                               <>
-                                <div 
-                                  className="fixed inset-0 z-10" 
+                                <div
+                                  className="fixed inset-0 z-10"
                                   onClick={() => setIsGroupByDropdownOpen(false)}
                                 />
                                 <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg z-20 divide-y divide-slate-100 dark:divide-slate-800">
@@ -3459,7 +4631,7 @@ export default function App() {
                       </div>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${collapsedPanels.timeEncoding ? '' : 'rotate-180'}`} />
                     </button>
-                    
+
                     {!collapsedPanels.timeEncoding && (
                       detectedTimeComponents.length > 0 ? (
                         <div className="p-4 space-y-4 animate-slide-up text-xs">
@@ -3533,10 +4705,10 @@ export default function App() {
                                   };
                                   const period = periodMap[comp.componentType];
                                   const isYear = comp.componentType === 'year';
-                                  
+
                                   const isEnabled = !!timeComponentToggles[comp.id];
                                   const currentMethod = timeComponentEncodings[comp.id] || (isYear ? 'minmax' : 'sincos');
-                                  
+
                                   let methodRender = '';
                                   if (isYear) {
                                     methodRender = (
@@ -3555,7 +4727,7 @@ export default function App() {
                                   } else {
                                     methodRender = <span>Sin/Cos (2π × val / {period})</span>;
                                   }
-                                  
+
                                   let previewFormula = '';
                                   if (isEnabled) {
                                     if (isYear) {
@@ -3887,7 +5059,7 @@ export default function App() {
                 {/* Inline Model Hyperparameters */}
                 <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800/60">
                   <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Model-Specific Hyperparameters</span>
-                  
+
                   {selectedModels.map(modelId => {
                     const modelMeta = MODEL_REGISTRY[goal]?.find(m => m.id === modelId);
                     if (!modelMeta) return null;
@@ -4140,9 +5312,741 @@ export default function App() {
           )}
 
           {/* ==========================================
-              PAGE 3: TRAINING REPORT & MODEL OUTPUT
+              PAGE 3: DATA QUALITY INTELLIGENCE
              ========================================== */}
-          {page === 3 && trainingResults && (() => {
+          {page === 3 && dqiDataset && (() => {
+            const activeAnoms = dqiAnomalyLog.filter(a => a.status === 'active');
+            const totalAnomsCount = activeAnoms.length;
+            const targetPillar = (goal === 'forecasting' && dqiReport.granularity < 70) ? 'Granularity' : (goal === 'forecasting' && dqiReport.historicity < 70) ? 'Historicity' : dqiReport.value < 70 ? 'Value' : null;
+            const failingReason = dqiReport.granularity < 70
+              ? 'Granularity is too low. Ensure your dataset has regular intervals or set a valid chronological date index.'
+              : dqiReport.historicity < 70
+                ? 'Historicity check failed. Data is too stale or has rolling segments of missing periods.'
+                : dqiReport.value < 70
+                  ? 'Value completeness failed. High presence of anomalous values, flatlines, or invalid price metrics.'
+                  : null;
+
+            // Sort activeAnoms so High severity is first, then Z-Score Outlier, then IQR, then Null, then Flatline
+            const sortedActiveAnoms = [...activeAnoms].sort((a, b) => {
+              if (a.severity === 'High' && b.severity !== 'High') return -1;
+              if (a.severity !== 'High' && b.severity === 'High') return 1;
+              if (a.type === 'Z-Score Outlier' && b.type !== 'Z-Score Outlier') return -1;
+              if (a.type !== 'Z-Score Outlier' && b.type === 'Z-Score Outlier') return 1;
+              return 0;
+            });
+            const mostSignificantAnomaly = sortedActiveAnoms[0] || null;
+
+            return (
+              <div className="space-y-6">
+                {/* Header Section */}
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+                    <CheckSquare className="w-5 h-5 text-indigo-500" />
+                    <span>Data Quality Intelligence</span>
+                  </h2>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+                    Assess forecasting readiness, detect values anomalies, and execute resolution workflows before pipeline training.
+                  </p>
+                </div>
+
+                {/* Grid 1: Three Pillar Assessment & Forecast Readiness Score */}
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                  {/* Readiness Score Card */}
+                  <div className="lg:col-span-1 bg-gradient-to-tr from-indigo-500 to-indigo-650 text-white rounded-2xl p-5 flex flex-col items-center justify-center text-center relative overflow-hidden shadow-md">
+                    <div className="absolute inset-0 bg-white/5 backdrop-blur-[20px] pointer-events-none" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-100 relative z-10">Forecasting Readiness</span>
+                    <strong className="text-4xl font-extrabold my-2 relative z-10">{dqiReadinessScore}%</strong>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full relative z-10 ${dqiReadinessScore >= 70 ? 'bg-emerald-500/20 text-emerald-100' : 'bg-rose-500/20 text-rose-100'}`}>
+                      {dqiReadinessScore >= 70 ? 'Ready to Model' : 'Action Required'}
+                    </span>
+                  </div>
+
+                  {/* Pillars cards */}
+                  {[
+                    { 
+                      title: 'Granularity', 
+                      val: dqiReport.granularity, 
+                      desc: 'Ratio, grain inference & forecast feasibility', 
+                      icon: Database,
+                      emoji: '📐',
+                      tooltipDesc: 'Tracks date frequency and regularities. Transactional or highly irregular dates reduce forecast coherence. Pre-aggregating data ensures the model learns seasonal cycles rather than noise.'
+                    },
+                    { 
+                      title: 'Historicity', 
+                      val: dqiReport.historicity, 
+                      desc: 'Freshness, span coverage & null rate drift', 
+                      icon: History,
+                      emoji: '⏳',
+                      tooltipDesc: 'Evaluates time coverage and freshness. Stale databases limit real-world model prediction accuracy, while large temporal gaps prevent the model from generalizing recent market dynamics.'
+                    },
+                    { 
+                      title: 'Value', 
+                      val: dqiReport.value, 
+                      desc: 'Feature completeness, validity & stability', 
+                      icon: Sliders,
+                      emoji: '💎',
+                      tooltipDesc: 'Checks completeness and statistical stability. Outliers, missing values, or flatline inputs degrade weight updates. Cleaning or imputing entries stabilizes variance and coefficients.'
+                    }
+                  ].map((p, idx) => {
+                    const status = p.val >= 85 ? 'Optimized' : p.val >= 70 ? 'Acceptable' : 'Failing';
+                    const color = p.val >= 85 ? 'text-emerald-500 bg-emerald-500/10' : p.val >= 70 ? 'text-amber-500 bg-amber-500/10' : 'text-rose-500 bg-rose-500/10';
+                    return (
+                      <div key={idx} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-sm">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{p.title}</span>
+                            <p.icon className="w-4 h-4 text-slate-400" />
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-tight">{p.desc}</p>
+                        </div>
+                        <div className="flex items-center justify-between pt-4 mt-2 border-t border-slate-50 dark:border-slate-800/40">
+                          <div className="flex items-center space-x-1.5">
+                            <strong className="text-xl font-extrabold text-slate-700 dark:text-slate-200">{p.val}</strong>
+                            <div className="relative group inline-block">
+                              <Info className="w-3.5 h-3.5 text-slate-400 hover:text-indigo-500 transition-colors cursor-help" />
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-slate-950/98 dark:bg-slate-900/98 text-slate-200 dark:text-slate-100 text-[11px] font-normal leading-relaxed rounded-xl shadow-xl border border-slate-800 backdrop-blur-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all duration-200 z-50">
+                                <div className="font-bold text-slate-100 mb-1 flex items-center space-x-1">
+                                  <span>{p.emoji}</span>
+                                  <span>{p.title} Pillar & Impact</span>
+                                </div>
+                                <p className="text-slate-300 dark:text-slate-400 font-sans">{p.tooltipDesc}</p>
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-950 dark:border-t-slate-900" />
+                              </div>
+                            </div>
+                          </div>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${color}`}>
+                            {status}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Most Significant Anomaly Spotlight & Collective Action Panel */}
+                {activeAnoms.length > 0 && mostSignificantAnomaly && (
+                  <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 shadow-sm">
+                    <div className="flex items-start space-x-3 flex-1">
+                      <div className="p-2 bg-rose-500/10 text-rose-500 rounded-xl shrink-0 mt-0.5 animate-pulse">
+                        <AlertCircle className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 uppercase tracking-wider">Spotlight: Most Significant Anomaly</span>
+                          <span className="text-[9px] text-slate-400 font-mono">ID: {mostSignificantAnomaly.id}</span>
+                        </div>
+                        <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100 leading-snug">
+                          Feature '{mostSignificantAnomaly.feature}' contains a {mostSignificantAnomaly.type} at {mostSignificantAnomaly.rowLabel} (Value: {mostSignificantAnomaly.value})
+                        </h4>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                          Recommended mitigation: {mostSignificantAnomaly.recommendedAction}. Resolve below or apply bulk actions.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800/60">
+                      <button
+                        onClick={() => handleImputeAnomaly(mostSignificantAnomaly)}
+                        className="px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[10px] font-bold transition shadow-sm cursor-pointer"
+                      >
+                        Impute Spotlight
+                      </button>
+                      <button
+                        onClick={() => handleQuarantineAnomaly(mostSignificantAnomaly)}
+                        className="px-2.5 py-1 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-[10px] font-bold transition shadow-sm cursor-pointer"
+                      >
+                        Quarantine Row
+                      </button>
+                    </div>
+
+                    <div className="hidden md:block w-px h-10 bg-slate-200 dark:bg-slate-800/60" />
+
+                    <div className="flex flex-col space-y-1.5 shrink-0">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block text-center md:text-left">Collective operations ({activeAnoms.length} items)</span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={handleImputeAllAnomalies}
+                          className="px-2.5 py-1 bg-indigo-500/10 text-indigo-500 border border-indigo-200 dark:border-indigo-900/50 hover:bg-indigo-500 hover:text-white rounded-lg text-[10px] font-bold transition cursor-pointer"
+                        >
+                          Impute All
+                        </button>
+                        <button
+                          onClick={handleQuarantineAllAnomalies}
+                          className="px-2.5 py-1 bg-rose-500/10 text-rose-500 border border-rose-200 dark:border-rose-900/50 hover:bg-rose-500 hover:text-white rounded-lg text-[10px] font-bold transition cursor-pointer"
+                        >
+                          Quarantine All
+                        </button>
+                        <button
+                          onClick={() => {
+                            const r = prompt("Reason to ignore all active anomalies:");
+                            if (r !== null) handleIgnoreAllAnomalies(r);
+                          }}
+                          className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 border border-slate-200 dark:border-slate-800 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                        >
+                          Ignore All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Grid 1.5: Category Trend Breakdown */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden">
+                  {/* Panel header */}
+                  <button
+                    onClick={() => setDqiCategoryPanelOpen(o => !o)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <TrendingUp className="w-4 h-4 text-indigo-500" />
+                      <span className="font-bold text-xs text-slate-800 dark:text-slate-100">
+                        Target Trend by Category
+                      </span>
+                      {dqiCategoryColumns.length > 0 && (
+                        <span className="text-[9px] font-medium text-slate-400">
+                          — <span className="text-indigo-400 font-bold">{targetColumn}</span> split by{' '}
+                          <span className="text-violet-400 font-bold">{dqiCategoryColumns.join(' + ')}</span>
+                        </span>
+                      )}
+                      {/* Anomaly count badge */}
+                      {(() => {
+                        const totalCatAnoms = Object.values(dqiCategoryAnomalyMap).reduce((s, a) => s + a.length, 0);
+                        return totalCatAnoms > 0 ? (
+                          <span className="text-[8px] font-bold px-1.5 py-0.5 bg-rose-500/10 text-rose-500 rounded-full">
+                            {totalCatAnoms} anomalies
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
+                    <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${dqiCategoryPanelOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {dqiCategoryPanelOpen && (
+                    <div className="px-4 pb-4 space-y-4">
+                      {/* Column selectors */}
+                      {groupByColumns.length > 0 ? (
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-1 text-xs">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Primary Category:</span>
+                            <select
+                              value={dqiPrimaryCategory}
+                              onChange={(e) => setDqiPrimaryCategory(e.target.value)}
+                              className="bg-slate-50 dark:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded px-2.5 py-1 text-[11px] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            >
+                              {groupByColumns.map(col => (
+                                <option key={col} value={col}>{col}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Subgroup:</span>
+                            <select
+                              value={dqiSubgroupCategory}
+                              onChange={(e) => setDqiSubgroupCategory(e.target.value)}
+                              className="bg-slate-50 dark:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded px-2.5 py-1 text-[11px] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            >
+                              <option value="none">None (Single Level)</option>
+                              {groupByColumns.filter(col => col !== dqiPrimaryCategory).map(col => (
+                                <option key={col} value={col}>{col}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 italic pt-1">
+                          Set Group By columns on Page 2 (Aggregation Settings) to enable category breakdown.
+                        </p>
+                      )}
+
+                      {dqiCategoryColumns.length > 0 && dqiCategoryChartData.keys.length > 0 && (
+                        <>
+                          {/* Multi-line chart */}
+                          <div className="h-52 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={dqiCategoryChartData.rows} margin={{ top: 8, right: 16, left: -20, bottom: 12 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.1} />
+                                <XAxis
+                                  dataKey="name"
+                                  type="category"
+                                  allowDuplicatedCategory={false}
+                                  stroke="var(--text-muted)"
+                                  fontSize={8}
+                                  tickLine={false}
+                                  axisLine={false}
+                                  interval={Math.max(0, Math.floor(dqiCategoryChartData.rows.length / 8) - 1)}
+                                  label={{ value: dateColumn || 'Date / Time', position: 'insideBottom', offset: -2, fill: 'var(--text-muted)', fontSize: 8 }}
+                                />
+                                <YAxis stroke="var(--text-muted)" fontSize={8} tickLine={false} axisLine={false} />
+                                <Legend
+                                  iconSize={8}
+                                  iconType="circle"
+                                  wrapperStyle={{ fontSize: '9px', paddingTop: '4px' }}
+                                />
+                                <ChartTooltip
+                                  content={({ active, payload, label }) => {
+                                    if (active && payload && payload.length) {
+                                      return (
+                                        <div className="bg-slate-900 border border-slate-800 text-white rounded-xl p-2.5 shadow-xl text-[10px] space-y-1 max-w-xs">
+                                          <p className="font-bold text-slate-400 pb-0.5 border-b border-slate-800">{label}</p>
+                                          {payload.map((p, i) => {
+                                            const catAnoms = dqiCategoryAnomalyMap[p.dataKey] || [];
+                                            return (
+                                              <div key={i} className="flex items-center justify-between gap-3">
+                                                <span style={{ color: p.color }} className="font-bold truncate max-w-[140px]">{p.name}</span>
+                                                <span className="font-mono text-slate-100">{p.value ?? '—'}</span>
+                                                {catAnoms.length > 0 && (
+                                                  <span className="text-rose-400 text-[8px] font-bold">⚠ {catAnoms.length} anom</span>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  }}
+                                />
+                                {dqiCategoryChartData.keys.map((key, i) => (
+                                  <Line
+                                    key={key}
+                                    type="monotone"
+                                    dataKey={key}
+                                    name={key}
+                                    stroke={CAT_PALETTE[i % CAT_PALETTE.length]}
+                                    strokeWidth={1.5}
+                                    dot={false}
+                                    connectNulls={false}
+                                  />
+                                ))}
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+
+                          {/* Per-category anomaly summary table */}
+                          <div>
+                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                              Category Anomaly Summary — <span className="text-indigo-400">{targetColumn}</span>
+                            </h4>
+                            <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden">
+                              <table className="w-full text-[11px] text-left">
+                                <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
+                                  <tr>
+                                    <th className="py-2 px-3">Category</th>
+                                    <th className="py-2 px-3">Rows</th>
+                                    <th className="py-2 px-3">Anomalies</th>
+                                    <th className="py-2 px-3">Dominant Type</th>
+                                    <th className="py-2 px-3">Severity Mix</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                                  {dqiCategoryChartData.keys.map((key, i) => {
+                                    const anoms = dqiCategoryAnomalyMap[key] || [];
+                                    const rowCount = dqiDataset?.sampleRows?.filter(r =>
+                                      dqiCategoryColumns.map(col => {
+                                        const v = r[col]; return v === null || v === undefined ? 'N/A' : String(v).trim();
+                                      }).join(' | ') === key
+                                    ).length || 0;
+                                    const typeCounts = {};
+                                    anoms.forEach(a => { typeCounts[a.type] = (typeCounts[a.type] || 0) + 1; });
+                                    const dominantType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '—';
+                                    const highCount = anoms.filter(a => a.severity === 'High').length;
+                                    const medCount = anoms.filter(a => a.severity === 'Medium').length;
+                                    return (
+                                      <tr key={key} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
+                                        <td className="py-2 px-3 font-semibold flex items-center gap-1.5">
+                                          <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{ backgroundColor: CAT_PALETTE[i % CAT_PALETTE.length] }}></span>
+                                          <span className="truncate max-w-[160px]" title={key}>{key}</span>
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-500">{rowCount}</td>
+                                        <td className="py-2 px-3">
+                                          {anoms.length === 0
+                                            ? <span className="text-emerald-500 font-bold">✓ Clean</span>
+                                            : <span className="text-rose-500 font-bold">{anoms.length}</span>
+                                          }
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-500">{dominantType}</td>
+                                        <td className="py-2 px-3">
+                                          {anoms.length > 0 ? (
+                                            <div className="flex items-center gap-1">
+                                              {highCount > 0 && <span className="text-[8px] font-bold px-1 py-0.5 bg-rose-500/10 text-rose-500 rounded">{highCount}H</span>}
+                                              {medCount > 0 && <span className="text-[8px] font-bold px-1 py-0.5 bg-amber-500/10 text-amber-500 rounded">{medCount}M</span>}
+                                            </div>
+                                          ) : <span className="text-slate-300">—</span>}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {dqiCategoryColumns.length > 0 && dqiCategoryChartData.keys.length === 0 && (
+                        <p className="text-[10px] text-slate-400 italic text-center py-4">
+                          No data available. Ensure the dataset has rows and the target column is set.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Grid 2: Anomaly Detection Chart & Table */}
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  {/* Chart and Table Panel */}
+                  <div className="xl:col-span-2 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 space-y-4 shadow-sm">
+                     {(() => {
+                        const selColMeta = dqiDataset?.columnsInfo?.find(c => c.name === dqiSelectedFeature);
+                        const isSelectedCat = selColMeta?.type === 'categorical';
+                        return (
+                          <>
+                            {/* Panel header — dropdown + type badge */}
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-slate-50 dark:border-slate-800/60">
+                              <div>
+                                <h3 className="font-bold text-xs text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
+                                  <Flame className="w-4 h-4 text-rose-500" />
+                                  <span>Anomaly Detection</span>
+                                  {/* Type badge */}
+                                  <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ml-1 ${isSelectedCat ? 'bg-violet-500/10 text-violet-500' : 'bg-indigo-500/10 text-indigo-500'}`}>
+                                    {isSelectedCat ? '🏷️ Categorical' : '📊 Numeric'}
+                                  </span>
+                                </h3>
+                                <span className="text-[9px] text-slate-400 font-medium">
+                                  {isSelectedCat
+                                    ? 'Rare categories, monoculture & null spikes'
+                                    : 'Outliers, null spikes, and flatline sequence mapping'}
+                                </span>
+                              </div>
+
+                              {/* Dropdown to select feature with type icons */}
+                              <div className="flex items-center space-x-2">
+                                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Feature:</span>
+                                <select
+                                  value={dqiSelectedFeature}
+                                  onChange={(e) => setDqiSelectedFeature(e.target.value)}
+                                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2 py-0.5 text-[11px]"
+                                >
+                                  {Array.from(new Set([targetColumn, ...selectedFeaturesList])).filter(Boolean).map(f => {
+                                    const fMeta = dqiDataset?.columnsInfo?.find(c => c.name === f);
+                                    const icon = fMeta?.type === 'categorical' ? '🏷️' : '📊';
+                                    return <option key={f} value={f}>{icon} {f}</option>;
+                                  })}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Chart — type-aware */}
+                            <div className="h-44 w-full pt-2">
+                              <ResponsiveContainer width="100%" height="100%">
+                                {isSelectedCat ? (
+                                  /* ── CATEGORICAL: horizontal frequency bar chart ── */
+                                  <BarChart
+                                    data={dqiChartData}
+                                    layout="vertical"
+                                    margin={{ top: 4, right: 16, left: 4, bottom: 4 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" strokeOpacity={0.1} />
+                                    <XAxis
+                                      type="number"
+                                      stroke="var(--text-muted)"
+                                      fontSize={8}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      allowDecimals={false}
+                                    />
+                                    <YAxis
+                                      type="category"
+                                      dataKey="name"
+                                      width={90}
+                                      stroke="var(--text-muted)"
+                                      fontSize={8}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      tick={{ fontSize: 8 }}
+                                      tickFormatter={(v) => v.length > 14 ? v.slice(0, 13) + '…' : v}
+                                    />
+                                    <ChartTooltip
+                                      cursor={{ fill: 'rgba(99,102,241,0.06)' }}
+                                      content={({ active, payload }) => {
+                                        if (active && payload && payload.length) {
+                                          const d = payload[0].payload;
+                                          return (
+                                            <div className="bg-slate-900 border border-slate-800 text-white rounded-xl p-2.5 shadow-xl text-[10px] space-y-0.5">
+                                              <p className="font-bold text-slate-300">{d.name}</p>
+                                              <p className="font-mono text-slate-100">Count: <span className="font-bold text-indigo-300">{d.value}</span></p>
+                                              <p className="text-slate-400">{d.pct}% of non-null rows</p>
+                                              {d.isRare && (
+                                                <p className="text-rose-400 font-bold flex items-center gap-1 pt-0.5">
+                                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block animate-pulse"></span>
+                                                  Rare Category Anomaly
+                                                </p>
+                                              )}
+                                            </div>
+                                          );
+                                        }
+                                        return null;
+                                      }}
+                                    />
+                                    <Bar dataKey="value" radius={[0, 3, 3, 0]}>
+                                      {dqiChartData.map((entry, index) => (
+                                        <Cell
+                                          key={`cell-${index}`}
+                                          fill={entry.isRare ? '#ef4444' : '#6366f1'}
+                                          fillOpacity={entry.isRare ? 0.9 : 0.7}
+                                        />
+                                      ))}
+                                    </Bar>
+                                  </BarChart>
+                                ) : (
+                                  /* ── NUMERIC: existing time-series line chart ── */
+                                  <ComposedChart data={dqiChartData} margin={{ top: 10, right: 10, left: -20, bottom: 12 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.1} />
+                                    <XAxis
+                                      dataKey="name"
+                                      type="category"
+                                      allowDuplicatedCategory={false}
+                                      domain={dqiChartData.map(d => d.name)}
+                                      stroke="var(--text-muted)"
+                                      fontSize={8}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      interval={Math.max(0, Math.floor(dqiChartData.length / 8) - 1)}
+                                      label={{ value: dateColumn || 'Date / Time', position: 'insideBottom', offset: -2, fill: 'var(--text-muted)', fontSize: 8 }}
+                                    />
+                                    <YAxis stroke="var(--text-muted)" fontSize={8} tickLine={false} axisLine={false} />
+                                    <ChartTooltip
+                                      content={({ active, payload, label }) => {
+                                        if (active && payload && payload.length) {
+                                          const pData = payload[0].payload;
+                                          const val = payload[0].value;
+                                          const hasAnomaly = pData.anomalyCount > 0;
+                                          return (
+                                            <div className="bg-slate-900 border border-slate-800 text-white rounded-xl p-2.5 shadow-xl text-[10px] space-y-1">
+                                              <p className="font-bold text-slate-400">{pData.rowLabel} ({label})</p>
+                                              <p className="font-mono text-slate-100">{dqiSelectedFeature}: <span className="font-bold text-indigo-300">{val}</span></p>
+                                              {hasAnomaly && (
+                                                <div className="border-t border-slate-800/80 pt-1 mt-1 space-y-0.5">
+                                                  <p className="text-rose-400 font-bold flex items-center gap-1">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block animate-pulse"></span>
+                                                    {pData.anomalyCount} Anomaly/Anomalies Detected:
+                                                  </p>
+                                                  <ul className="list-disc pl-3 text-rose-300/90 space-y-0.5 text-[9px]">
+                                                    {pData.anomalies.map((anom, idx) => (
+                                                      <li key={idx}>
+                                                        Row {anom.index + 1}: {anom.type} ({anom.value})
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        }
+                                        return null;
+                                      }}
+                                    />
+                                    <Line type="monotone" dataKey="value" name={dqiSelectedFeature} stroke="#6366f1" strokeWidth={1.5} dot={false} />
+                                    <Line type="monotone" dataKey="anomaly" name="Anomaly Point" stroke="transparent" dot={{ r: 4.5, stroke: '#ef4444', strokeWidth: 2, fill: '#ef4444' }} />
+                                  </ComposedChart>
+                                )}
+                              </ResponsiveContainer>
+                            </div>
+                          </>
+                        );
+                      })()}
+
+
+                    {/* Table below chart */}
+                    <div className="pt-2">
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Detected Anomalies on '{dqiSelectedFeature}'</h4>
+                      <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden max-h-44 overflow-y-auto">
+                        <table className="w-full text-[11px] text-left">
+                          <thead className="bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase tracking-wider text-[8px]">
+                            <tr>
+                              <th className="py-2 px-3">Location</th>
+                              <th className="py-2 px-3">Type</th>
+                              <th className="py-2 px-3">Value</th>
+                              <th className="py-2 px-3">Severity</th>
+                              <th className="py-2 px-3">Action status</th>
+                              <th className="py-2 px-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
+                            {dqiAnomalyLog.filter(a => a.feature === dqiSelectedFeature).map(anom => {
+                              const badgeColor = anom.severity === 'High' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-500';
+                              const statusColor = anom.status === 'active' ? 'text-slate-400' : anom.status === 'ignored' ? 'text-slate-400 line-through' : 'text-emerald-500 font-bold';
+                              return (
+                                <tr key={anom.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/25">
+                                  <td className="py-2 px-3 font-semibold">{anom.rowLabel}</td>
+                                  <td className="py-2 px-3">{anom.type}</td>
+                                  <td className="py-2 px-3 font-mono">{anom.value}</td>
+                                  <td className="py-2 px-3">
+                                    <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${badgeColor}`}>{anom.severity}</span>
+                                  </td>
+                                  <td className={`py-2 px-3 uppercase text-[9px] ${statusColor}`}>{anom.status}</td>
+                                  <td className="py-1 px-3 text-right space-x-1 whitespace-nowrap">
+                                    {anom.status === 'active' ? (
+                                      <>
+                                        <button
+                                          onClick={() => handleImputeAnomaly(anom)}
+                                          title="Impute value"
+                                          className="px-2 py-0.5 bg-indigo-500/10 text-indigo-500 border border-indigo-200 dark:border-indigo-900 rounded hover:bg-indigo-500 hover:text-white text-[9px] font-bold transition"
+                                        >
+                                          Impute
+                                        </button>
+                                        <button
+                                          onClick={() => handleQuarantineAnomaly(anom)}
+                                          title="Exclude row"
+                                          className="px-2 py-0.5 bg-rose-500/10 text-rose-500 border border-rose-200 dark:border-rose-900 rounded hover:bg-rose-500 hover:text-white text-[9px] font-bold transition"
+                                        >
+                                          Quarantine
+                                        </button>
+                                        <button
+                                          onClick={() => handleAlertAnomaly(anom)}
+                                          title="Alert notification"
+                                          className="px-2 py-0.5 bg-amber-500/10 text-amber-500 border border-amber-200 dark:border-amber-900 rounded hover:bg-amber-500 hover:text-white text-[9px] font-bold transition"
+                                        >
+                                          Alert
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            const r = prompt("Reason to ignore:");
+                                            if (r !== null) handleIgnoreAnomaly(anom, r);
+                                          }}
+                                          title="Ignore anomaly"
+                                          className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-800 rounded hover:bg-slate-300 dark:hover:bg-slate-700 text-[9px] font-bold transition"
+                                        >
+                                          Ignore
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 italic">Resolved</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {dqiAnomalyLog.filter(a => a.feature === dqiSelectedFeature).length === 0 && (
+                              <tr>
+                                <td colSpan="6" className="py-4 px-3 text-center text-slate-400 italic">No anomalies detected for this feature</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Side: Audit Trail & Notification Log */}
+                  <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 space-y-4 shadow-sm flex flex-col justify-between">
+                    <div className="space-y-3">
+                      <div className="pb-2 border-b border-slate-50 dark:border-slate-800/60">
+                        <h3 className="font-bold text-xs text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
+                          <CheckCircle className="w-4 h-4 text-emerald-500" />
+                          <span>Audit Trail & Alerts</span>
+                        </h3>
+                        <span className="text-[9px] text-slate-400 font-medium">Record of quality preprocessing pipeline steps</span>
+                      </div>
+
+                      <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin">
+                        {dqiAuditTrail.map((trail, idx) => {
+                          let labelColor = 'bg-slate-100 text-slate-500';
+                          if (trail.action === 'Impute') labelColor = 'bg-indigo-500/10 text-indigo-500';
+                          if (trail.action === 'Quarantine') labelColor = 'bg-rose-500/10 text-rose-500';
+                          if (trail.action === 'Alert') labelColor = 'bg-amber-500/10 text-amber-500';
+                          if (trail.action === 'Ignore') labelColor = 'bg-slate-100 dark:bg-slate-800 text-slate-400';
+                          return (
+                            <div key={idx} className="p-2 border border-slate-50 dark:border-slate-850 rounded-xl space-y-1 text-[10px]">
+                              <div className="flex justify-between items-center text-[8px] font-bold">
+                                <span className={`px-1 py-0.5 rounded ${labelColor}`}>{trail.action}</span>
+                                <span className="text-slate-400">{trail.timestamp}</span>
+                              </div>
+                              <p className="text-slate-655 dark:text-slate-350 leading-relaxed font-sans">{trail.message}</p>
+                            </div>
+                          );
+                        })}
+                        {dqiAuditTrail.length === 0 && (
+                          <div className="text-center py-8 text-slate-400 italic text-[11px]">No audit history logged</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Proceed Gate Info */}
+                    <div className="pt-3 border-t border-slate-50 dark:border-slate-800/40 space-y-2.5">
+                      {targetPillar ? (
+                        /* Warning Banner (Non-Blocking) */
+                        <div className="space-y-2">
+                          <div className="p-3 bg-amber-500/5 dark:bg-amber-955/15 border border-amber-500/25 rounded-xl space-y-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-500 flex items-center space-x-1">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-550 dark:text-amber-400 animate-pulse" />
+                              <span>Quality Warning</span>
+                            </span>
+                            <p className="text-[10px] text-slate-550 dark:text-slate-400 leading-normal">
+                              Your dataset does not meet the recommended forecasting readiness thresholds. You may proceed, but model accuracy/performance may be impacted.
+                            </p>
+                          </div>
+
+                          {/* Recommended Fixes checklist */}
+                          <div className="space-y-1.5">
+                            {dqiReport.granularity < 70 && goal === 'forecasting' && (
+                              <div className="p-2 border border-amber-500/20 dark:border-amber-900/40 bg-amber-500/5 rounded-xl text-[10px] space-y-0.5">
+                                <span className="font-bold text-amber-600 dark:text-amber-400 block uppercase tracking-wider text-[8px]">⚠️ RECOMMENDED FIX: Granularity</span>
+                                <p className="text-slate-550 dark:text-slate-400 leading-normal">
+                                  Select a valid date column, or enable <strong>Group-By Aggregation</strong> on Page 2 using your Date column to regularize intervals.
+                                </p>
+                              </div>
+                            )}
+                            {dqiReport.historicity < 70 && goal === 'forecasting' && (
+                              <div className="p-2 border border-amber-500/20 dark:border-amber-900/40 bg-amber-500/5 rounded-xl text-[10px] space-y-0.5">
+                                <span className="font-bold text-amber-600 dark:text-amber-400 block uppercase tracking-wider text-[8px]">⚠️ RECOMMENDED FIX: Historicity</span>
+                                <p className="text-slate-550 dark:text-slate-400 leading-normal">
+                                  Timeline covers less than 90 days or is too stale. Provide more historical records with recent dates.
+                                </p>
+                              </div>
+                            )}
+                            {dqiReport.value < 70 && (
+                              <div className="p-2 border border-amber-500/20 dark:border-amber-900/40 bg-amber-500/5 rounded-xl text-[10px] space-y-0.5">
+                                <span className="font-bold text-amber-600 dark:text-amber-400 block uppercase tracking-wider text-[8px]">⚠️ RECOMMENDED FIX: Value Completeness</span>
+                                <p className="text-slate-550 dark:text-slate-400 leading-normal">
+                                  High outlier rate or null density. Apply <strong>Impute All</strong> or <strong>Quarantine All</strong> bulk actions above to clean values.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        /* Clear banner (Allowed) */
+                        <div className="p-3 bg-emerald-500/5 dark:bg-emerald-950/15 border border-emerald-500/20 rounded-xl flex items-start space-x-2">
+                          <Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500 block">Readiness Verified</span>
+                            <p className="text-[10px] text-slate-400 leading-normal">All core quality thresholds are satisfied. Ready to proceed to model training.</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Big Proceed Button */}
+                      <button
+                        onClick={handleNextPage}
+                        className="w-full py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 shadow-md cursor-pointer bg-indigo-500 hover:bg-indigo-650 text-white"
+                      >
+                        <span>Proceed to Model Testing</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ==========================================
+              PAGE 4: TRAINING REPORT & MODEL OUTPUT
+             ========================================== */}
+          {page === 4 && trainingResults && (() => {
             const predictionsPerPage = 5;
             const currentPredictions = trainingResults.models[activePredictionModel]?.predictions || trainingResults.predictions || [];
             const totalPreds = currentPredictions.length;
@@ -4154,23 +6058,23 @@ export default function App() {
               const residuals = preds.map(p => Number(p.actual) - Number(p.predicted)).filter(v => !isNaN(v));
               if (residuals.length === 0) return { min: 0, q1: 0, median: 0, q3: 0, max: 0 };
               residuals.sort((a, b) => a - b);
-              
+
               const min = residuals[0];
               const max = residuals[residuals.length - 1];
               const median = residuals[Math.floor(residuals.length / 2)];
               const q1 = residuals[Math.floor(residuals.length * 0.25)];
               const q3 = residuals[Math.floor(residuals.length * 0.75)];
-              
+
               return { min, q1, median, q3, max };
             };
             const residuals = getResidualStats(currentPredictions);
 
             return (
               <div className="space-y-8">
-                
+
                 {/* SECTION A — TRAINING REPORT */}
                 <section className="space-y-6">
-                  
+
                   {/* Top status bar summary banner */}
                   <div className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white px-6 py-4 rounded-2xl shadow-md flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center space-x-3">
@@ -4187,6 +6091,59 @@ export default function App() {
                       <div>Finished: {trainingResults.timestamp}</div>
                     </div>
                   </div>
+
+                  {/* DATA QUALITY INTEGRITY CONTEXTUAL ADVISORY */}
+                  {dqiReport && (
+                    <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 p-4 rounded-2xl space-y-3 shadow-xs">
+                      <div className="flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/60">
+                        <Info className="w-4 h-4 text-indigo-500" />
+                        <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100">Data Quality Contextual Advisory</h4>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="p-3 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-1">
+                          <span className="text-slate-400 font-semibold block uppercase tracking-wider text-[9px]">Granularity Score</span>
+                          <strong className={`text-base block mt-0.5 ${dqiReport.granularity < 70 ? 'text-rose-500' : dqiReport.granularity < 85 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                            {dqiReport.granularity}/100
+                          </strong>
+                          {dqiReport.granularity < 75 && (
+                            <p className="text-[10px] text-slate-400 leading-normal">
+                              ⚠️ Irregular or transactional grain detected. Forecast intervals and predictions may exhibit higher variances.
+                            </p>
+                          )}
+                        </div>
+                        <div className="p-3 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-1">
+                          <span className="text-slate-400 font-semibold block uppercase tracking-wider text-[9px]">Historicity Score</span>
+                          <strong className={`text-base block mt-0.5 ${dqiReport.historicity < 70 ? 'text-rose-500' : dqiReport.historicity < 85 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                            {dqiReport.historicity}/100
+                          </strong>
+                          {dqiReport.historicity < 75 && (
+                            <p className="text-[10px] text-slate-400 leading-normal">
+                              ⚠️ Stale data or lag detected. Live performance metrics might deteriorate compared to validation bounds.
+                            </p>
+                          )}
+                        </div>
+                        <div className="p-3 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-1">
+                          <span className="text-slate-400 font-semibold block uppercase tracking-wider text-[9px]">Value Score</span>
+                          <strong className={`text-base block mt-0.5 ${dqiReport.value < 70 ? 'text-rose-500' : dqiReport.value < 85 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                            {dqiReport.value}/100
+                          </strong>
+                          {dqiReport.value < 75 && (
+                            <p className="text-[10px] text-slate-400 leading-normal">
+                              ⚠️ Completeness issues detected. Auto-imputations applied prior to model execution.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Summary of Actions Logged */}
+                      {dqiAuditTrail.length > 1 && (
+                        <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-50 dark:border-slate-800/40">
+                          <span className="font-bold text-slate-500">Pipeline Modifications Audit:</span> {dqiAuditTrail.filter(t => t.action !== 'Initialize').length} active clean action(s) performed on feature columns.
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Feature Selection Pipeline Report */}
                   {advancedMode && trainingResults.feature_pipeline_report && (() => {
@@ -4309,7 +6266,7 @@ export default function App() {
                   {advancedMode && (() => {
                     const comparisonCols = Object.keys(trainingResults.comparison[0]).filter(k => k !== 'modelName');
                     const selectedMetric = activeMetricChart || comparisonCols[0] || '';
-                    
+
                     const chartData = trainingResults.comparison.map(row => {
                       const formattedRow = { name: row.modelName };
                       Object.entries(row).forEach(([metric, val]) => {
@@ -4354,7 +6311,7 @@ export default function App() {
                         {expandedLeaderboard && (
                           <div className="px-6 pb-6 pt-4 border-t border-slate-100 dark:border-slate-800/60 space-y-6">
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                              
+
                               {/* Table Pane */}
                               <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
                                 <div className="space-y-4">
@@ -4380,8 +6337,8 @@ export default function App() {
                                             {Object.entries(row).filter(([k]) => k !== 'modelName').map(([metric, value]) => {
                                               const best = isBestMetric(metric, value, trainingResults.comparison);
                                               return (
-                                                <td 
-                                                  key={metric} 
+                                                <td
+                                                  key={metric}
                                                   className={`py-2.5 px-4 text-right font-mono font-bold ${best ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-655 dark:text-slate-400'}`}
                                                 >
                                                   {value}
@@ -4401,7 +6358,7 @@ export default function App() {
                                 <div className="space-y-4">
                                   <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800/60">
                                     <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">Accuracy & Metric Visual Comparison</h3>
-                                    
+
                                     {/* Pill Tabs to select metric */}
                                     <div className="flex flex-wrap gap-1">
                                       {comparisonCols.map(metric => (
@@ -4409,11 +6366,10 @@ export default function App() {
                                           key={metric}
                                           type="button"
                                           onClick={() => setActiveMetricChart(metric)}
-                                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition border ${
-                                            selectedMetric === metric
-                                              ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
-                                              : 'bg-slate-50 dark:bg-slate-800/40 text-slate-500 border-transparent hover:bg-slate-100 dark:hover:bg-slate-805'
-                                          }`}
+                                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition border ${selectedMetric === metric
+                                            ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500'
+                                            : 'bg-slate-50 dark:bg-slate-800/40 text-slate-500 border-transparent hover:bg-slate-100 dark:hover:bg-slate-805'
+                                            }`}
                                         >
                                           {metric}
                                         </button>
@@ -4426,11 +6382,11 @@ export default function App() {
                                     <ResponsiveContainer width="100%" height="100%">
                                       <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" strokeOpacity={0.15} />
-                                        <XAxis 
-                                          dataKey="name" 
-                                          stroke="var(--text-muted)" 
-                                          fontSize={10} 
-                                          tickLine={false} 
+                                        <XAxis
+                                          dataKey="name"
+                                          stroke="var(--text-muted)"
+                                          fontSize={10}
+                                          tickLine={false}
                                           axisLine={false}
                                           tickFormatter={(tick) => {
                                             return String(tick)
@@ -4441,26 +6397,26 @@ export default function App() {
                                               .replace('Random Forest', 'RF');
                                           }}
                                         />
-                                        <YAxis 
-                                          stroke="var(--text-muted)" 
-                                          fontSize={10} 
-                                          tickLine={false} 
+                                        <YAxis
+                                          stroke="var(--text-muted)"
+                                          fontSize={10}
+                                          tickLine={false}
                                           axisLine={false}
                                         />
-                                        <ChartTooltip 
-                                          contentStyle={{ 
-                                            background: 'var(--bg-raised)', 
-                                            border: '1px solid var(--border)', 
-                                            borderRadius: '10px', 
+                                        <ChartTooltip
+                                          contentStyle={{
+                                            background: 'var(--bg-raised)',
+                                            border: '1px solid var(--border)',
+                                            borderRadius: '10px',
                                             fontSize: '11px',
                                             color: 'var(--text-primary)'
                                           }}
                                           labelClassName="font-bold text-slate-750 dark:text-slate-200"
                                         />
-                                        <Bar 
-                                          dataKey={selectedMetric} 
-                                          fill="#6366f1" 
-                                          radius={[6, 6, 0, 0]} 
+                                        <Bar
+                                          dataKey={selectedMetric}
+                                          fill="#6366f1"
+                                          radius={[6, 6, 0, 0]}
                                           maxBarSize={40}
                                         />
                                       </BarChart>
@@ -4486,7 +6442,7 @@ export default function App() {
 
                     return (
                       <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition p-6 space-y-6">
-                        
+
                         {/* Selector Header Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800/60">
                           <div className="flex items-center space-x-3">
@@ -4498,7 +6454,7 @@ export default function App() {
                               <span className="text-[10px] text-slate-400 font-medium">Select a model from the dropdown to view its detailed curves and charts</span>
                             </div>
                           </div>
-                          
+
                           <div className="flex items-center space-x-3 bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 shrink-0 w-fit">
                             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Model:</label>
                             <select
@@ -4520,10 +6476,10 @@ export default function App() {
 
                         {/* Diagnostics Body */}
                         <div className="space-y-6 pt-2">
-                          
+
                           {/* 3-Column Sub-Grid */}
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                            
+
                             {/* Col 1: Metrics List Table */}
                             <div className="space-y-2">
                               <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Evaluation Metrics</span>
@@ -4560,13 +6516,13 @@ export default function App() {
                                     <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
                                     <XAxis type="number" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
                                     <YAxis dataKey="name" type="category" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} width={70} />
-                                    <ChartTooltip 
-                                      contentStyle={{ 
-                                        backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
+                                    <ChartTooltip
+                                      contentStyle={{
+                                        backgroundColor: darkMode ? '#1e293b' : '#ffffff',
                                         borderColor: darkMode ? '#334155' : '#e2e8f0',
                                         color: darkMode ? '#f1f5f9' : '#1e293b',
                                         fontSize: 10
-                                      }} 
+                                      }}
                                     />
                                     <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
                                   </BarChart>
@@ -4587,13 +6543,13 @@ export default function App() {
                                       <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
                                       <XAxis dataKey="epoch" stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
                                       <YAxis stroke={darkMode ? '#475569' : '#94a3b8'} style={{ fontSize: 9 }} />
-                                      <ChartTooltip 
-                                        contentStyle={{ 
-                                          backgroundColor: darkMode ? '#1e293b' : '#ffffff', 
+                                      <ChartTooltip
+                                        contentStyle={{
+                                          backgroundColor: darkMode ? '#1e293b' : '#ffffff',
                                           borderColor: darkMode ? '#334155' : '#e2e8f0',
                                           color: darkMode ? '#f1f5f9' : '#1e293b',
                                           fontSize: 10
-                                        }} 
+                                        }}
                                       />
                                       <Legend wrapperStyle={{ fontSize: 10 }} />
                                       <Line type="monotone" dataKey="trainLoss" name="Train Loss" stroke="#6366f1" strokeWidth={2} activeDot={{ r: 5 }} dot={false} />
@@ -4753,7 +6709,7 @@ export default function App() {
                         <span className="text-slate-400 font-semibold">
                           Showing {startPredIdx + 1} - {Math.min(totalPreds, startPredIdx + predictionsPerPage)} of {totalPreds} test predictions
                         </span>
-                        
+
                         <div className="flex space-x-1.5 font-bold">
                           <button
                             type="button"
@@ -4855,7 +6811,7 @@ export default function App() {
                                 }}
                               />
                               <Legend wrapperStyle={{ fontSize: 11 }} />
-                              
+
                               {/* Confidence Band Area */}
                               <Area
                                 type="monotone"
@@ -4866,7 +6822,7 @@ export default function App() {
                                 fillOpacity={0.15}
                                 connectNulls={true}
                               />
-                              
+
                               {/* Actual Line */}
                               <Line
                                 type="monotone"
@@ -4877,7 +6833,7 @@ export default function App() {
                                 dot={false}
                                 connectNulls={true}
                               />
-                              
+
                               {/* Forecast Line */}
                               <Line
                                 type="monotone"
@@ -4972,7 +6928,7 @@ export default function App() {
                             // Categorical
                             const uniqueVals = Array.from(
                               new Set(
-                                dataset.sampleRows
+                                activeDataset.sampleRows
                                   .map(r => r[feat])
                                   .filter(v => v !== null && v !== undefined && String(v).trim() !== '')
                               )
@@ -5032,58 +6988,58 @@ export default function App() {
                     {/* Results Cards Pane */}
                     <div className="lg:col-span-5 space-y-4">
                       <h3 className="font-bold text-sm text-slate-850 dark:text-slate-100">Live Model Outputs</h3>
-                      
+
                       {predictionResults ? (
                         <div className="space-y-3">
                           {Object.entries(predictionResults)
                             .filter(([modelId]) => advancedMode || modelId === activePredictionModel)
                             .map(([modelId, res]) => {
-                            const isClass = goal === 'classification';
-                            return (
-                              <div key={modelId} className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl p-4 shadow-sm border-l-4 border-l-indigo-500 space-y-2">
-                                <div className="flex justify-between items-center">
-                                  <span className="font-bold text-xs text-slate-800 dark:text-slate-100">{res.name}</span>
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 font-mono capitalize">{goal}</span>
-                                </div>
-
-                                <div className="py-2.5">
-                                  <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Prediction</span>
-                                  <span className="font-bold text-base text-indigo-600 dark:text-indigo-400 mt-1 block truncate">
-                                    {res.prediction}
-                                  </span>
-                                </div>
-
-                                {isClass && res.probabilities && (
-                                  <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/40">
-                                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Confidence Probabilities</span>
-                                    {Object.entries(res.probabilities).map(([className, pct]) => (
-                                      <div key={className} className="space-y-1">
-                                        <div className="flex justify-between text-[10px] font-semibold text-slate-500">
-                                          <span className="truncate max-w-[120px]">{className}</span>
-                                          <span className="font-mono">{pct}%</span>
-                                        </div>
-                                        <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                                          <div 
-                                            className="bg-indigo-500 h-full rounded-full transition-all duration-300"
-                                            style={{ width: `${pct}%` }}
-                                          />
-                                        </div>
-                                      </div>
-                                    ))}
+                              const isClass = goal === 'classification';
+                              return (
+                                <div key={modelId} className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl p-4 shadow-sm border-l-4 border-l-indigo-500 space-y-2">
+                                  <div className="flex justify-between items-center">
+                                    <span className="font-bold text-xs text-slate-800 dark:text-slate-100">{res.name}</span>
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 font-mono capitalize">{goal}</span>
                                   </div>
-                                )}
 
-                                {!isClass && res.range && (
-                                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800/40 text-[10px] text-slate-400 font-semibold flex justify-between">
-                                    <span>95% Confidence Interval</span>
-                                    <span className="font-mono text-slate-655 dark:text-slate-350 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 rounded">
-                                      [{res.range[0].toLocaleString()} - {res.range[1].toLocaleString()}]
+                                  <div className="py-2.5">
+                                    <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Prediction</span>
+                                    <span className="font-bold text-base text-indigo-600 dark:text-indigo-400 mt-1 block truncate">
+                                      {res.prediction}
                                     </span>
                                   </div>
-                                )}
-                              </div>
-                            );
-                          })}
+
+                                  {isClass && res.probabilities && (
+                                    <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/40">
+                                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Confidence Probabilities</span>
+                                      {Object.entries(res.probabilities).map(([className, pct]) => (
+                                        <div key={className} className="space-y-1">
+                                          <div className="flex justify-between text-[10px] font-semibold text-slate-500">
+                                            <span className="truncate max-w-[120px]">{className}</span>
+                                            <span className="font-mono">{pct}%</span>
+                                          </div>
+                                          <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                            <div
+                                              className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                                              style={{ width: `${pct}%` }}
+                                            />
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {!isClass && res.range && (
+                                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800/40 text-[10px] text-slate-400 font-semibold flex justify-between">
+                                      <span>95% Confidence Interval</span>
+                                      <span className="font-mono text-slate-655 dark:text-slate-350 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                                        [{res.range[0].toLocaleString()} - {res.range[1].toLocaleString()}]
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                         </div>
                       ) : (
                         <div className="border border-dashed border-slate-200 dark:border-slate-700/80 rounded-2xl p-8 flex flex-col items-center justify-center text-center text-slate-400 dark:text-slate-500 min-h-[200px] bg-slate-50/10 dark:bg-slate-900/10">
@@ -5106,7 +7062,7 @@ export default function App() {
                       <Download className="w-4 h-4 text-slate-500" />
                       <span>Download Predictions (CSV)</span>
                     </button>
-                    
+
                     <button
                       onClick={downloadReportJSON}
                       className="text-xs font-bold px-4 py-2 border border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-650 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center space-x-2 transition cursor-pointer"
@@ -5141,7 +7097,7 @@ export default function App() {
 
       {/* Backdrop overlay handler */}
       {(isDataOverviewOpen || isModelInventoryOpen || isTrainingHistoryOpen) && (
-        <div 
+        <div
           onClick={() => {
             setIsDataOverviewOpen(false);
             setIsModelInventoryOpen(false);
@@ -5152,7 +7108,7 @@ export default function App() {
       )}
 
       {/* RIGHT SIDE PANEL: DATA OVERVIEW (On All Pages) */}
-      <aside 
+      <aside
         className={`fixed top-0 right-0 z-50 h-full w-96 bg-white dark:bg-slate-900 border-l border-slate-100 dark:border-slate-800 shadow-2xl transform transition-transform duration-300 flex flex-col ${isDataOverviewOpen ? 'translate-x-0' : 'translate-x-full'}`}
       >
         <div className="p-5 border-b border-slate-150 dark:border-slate-800 flex justify-between items-center shrink-0">
@@ -5160,7 +7116,7 @@ export default function App() {
             <Database className="w-5 h-5 text-indigo-500" />
             <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">Data Overview</h3>
           </div>
-          <button 
+          <button
             onClick={() => setIsDataOverviewOpen(false)}
             className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
           >
@@ -5206,19 +7162,19 @@ export default function App() {
               const visibleRows = filteredRows.slice(startIndex, endIndex);
 
               return (
-                <div 
+                <div
                   onScroll={(e) => setOverviewScrollTop(e.target.scrollTop)}
                   className="overflow-auto flex-1 relative border border-slate-150 dark:border-slate-800 rounded-lg bg-slate-50/10 dark:bg-slate-900/10"
                   style={{ height: 'calc(100vh - 200px)' }}
                 >
                   <div style={{ height: totalHeight + rowHeight, minWidth: dataset.columnsInfo.length * 120, position: 'relative' }}>
                     {/* Sticky Header Row */}
-                    <div 
+                    <div
                       className="flex bg-slate-100 dark:bg-slate-800 font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px] sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700"
                       style={{ height: rowHeight }}
                     >
                       {dataset.columnsInfo.map(col => (
-                        <div 
+                        <div
                           key={col.name}
                           onClick={() => {
                             if (overviewSortCol === col.name) {
@@ -5235,20 +7191,20 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                    
+
                     {/* Virtualized Rows */}
                     {visibleRows.map((row, index) => {
                       const absoluteIdx = startIndex + index;
                       return (
-                        <div 
+                        <div
                           key={absoluteIdx}
                           className={`flex items-center text-xs border-b border-slate-100 dark:border-slate-800/40 hover:bg-indigo-50/20 dark:hover:bg-indigo-900/10 ${absoluteIdx % 2 === 0 ? 'bg-slate-50/50 dark:bg-slate-800/20' : 'bg-white dark:bg-slate-900'}`}
-                          style={{ 
-                            position: 'absolute', 
-                            top: (absoluteIdx * rowHeight) + rowHeight, 
-                            left: 0, 
-                            right: 0, 
-                            height: rowHeight 
+                          style={{
+                            position: 'absolute',
+                            top: (absoluteIdx * rowHeight) + rowHeight,
+                            left: 0,
+                            right: 0,
+                            height: rowHeight
                           }}
                         >
                           {dataset.columnsInfo.map(col => (
@@ -5278,7 +7234,7 @@ export default function App() {
       </aside>
 
       {/* ML INVENTORY DOUBLE-PANE DRAWER */}
-      <aside 
+      <aside
         className={`fixed top-0 left-0 h-full bg-white dark:bg-slate-900 border-r border-slate-150 dark:border-slate-805 shadow-2xl z-50 transform transition-transform duration-300 flex overflow-hidden ${isModelInventoryOpen ? 'translate-x-0' : '-translate-x-full'}`}
         style={{ width: '640px' }}
       >
@@ -5289,7 +7245,7 @@ export default function App() {
               <Layers className="w-4 h-4 text-indigo-500" />
               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xs uppercase tracking-wider">ML Inventory</h3>
             </div>
-            <button 
+            <button
               onClick={() => setIsModelInventoryOpen(false)}
               className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
             >
@@ -5305,14 +7261,13 @@ export default function App() {
                   {models.map(m => {
                     const isSelected = selectedInventoryModel?.id === m.id;
                     return (
-                      <button 
+                      <button
                         key={m.id}
                         onClick={() => setSelectedInventoryModel(m)}
-                        className={`w-full p-2.5 rounded-lg text-left text-xs transition border flex flex-col space-y-0.5 ${
-                          isSelected 
-                            ? 'bg-indigo-50 dark:bg-indigo-955/60 border-indigo-200 dark:border-indigo-900/50 text-indigo-650 dark:text-indigo-300 font-bold shadow-xs' 
-                            : 'border-transparent hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-605 dark:text-slate-400'
-                        }`}
+                        className={`w-full p-2.5 rounded-lg text-left text-xs transition border flex flex-col space-y-0.5 ${isSelected
+                          ? 'bg-indigo-50 dark:bg-indigo-955/60 border-indigo-200 dark:border-indigo-900/50 text-indigo-650 dark:text-indigo-300 font-bold shadow-xs'
+                          : 'border-transparent hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-605 dark:text-slate-400'
+                          }`}
                       >
                         <span className="font-bold truncate w-full">{m.name}</span>
                         <span className="text-[9px] text-slate-400 truncate w-full leading-none">{m.desc}</span>
@@ -5329,7 +7284,7 @@ export default function App() {
         <div className="w-96 flex flex-col bg-white dark:bg-slate-900 shrink-0">
           <div className="p-4 border-b border-slate-155 dark:border-slate-800 flex justify-between items-center bg-white dark:bg-slate-900 shrink-0">
             <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100 uppercase tracking-wider">Model Details</h4>
-            <button 
+            <button
               onClick={() => setIsModelInventoryOpen(false)}
               className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
             >
@@ -5388,7 +7343,7 @@ export default function App() {
       </aside>
 
       {/* RIGHT SIDE PANEL: TRAINING HISTORY */}
-      <aside 
+      <aside
         className={`fixed top-0 right-0 z-50 h-full w-96 bg-white dark:bg-slate-900 border-l border-slate-100 dark:border-slate-800 shadow-2xl transform transition-transform duration-300 flex flex-col ${isTrainingHistoryOpen ? 'translate-x-0' : 'translate-x-full'}`}
       >
         <div className="p-5 border-b border-slate-150 dark:border-slate-800 flex justify-between items-center shrink-0">
@@ -5396,7 +7351,7 @@ export default function App() {
             <History className="w-5 h-5 text-indigo-500" />
             <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">Training Run History</h3>
           </div>
-          <button 
+          <button
             onClick={() => setIsTrainingHistoryOpen(false)}
             className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
           >
@@ -5417,7 +7372,7 @@ export default function App() {
             <div className="space-y-3">
               {trainingHistory.map(run => (
                 <div key={run.id} className="p-4 rounded-xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-900/50 hover:border-slate-200 dark:hover:border-slate-700 transition relative group">
-                  <button 
+                  <button
                     onClick={() => deleteHistoryRun(run.id)}
                     className="absolute top-3 right-3 p-1 rounded-md text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition opacity-0 group-hover:opacity-100 focus:opacity-100"
                     title="Delete run record"
@@ -5466,7 +7421,7 @@ export default function App() {
       {isTraining && (
         <div className="fixed inset-0 z-50 bg-white/95 dark:bg-slate-900/98 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center select-none animate-fade-in transition-colors duration-200">
           <div className="max-w-md w-full space-y-6">
-            
+
             {/* Spinning Brain Logo */}
             <div className="relative flex justify-center">
               <div className="absolute w-16 h-16 rounded-full border-2 border-dashed border-indigo-500 animate-spin" />
@@ -5484,7 +7439,7 @@ export default function App() {
             {/* Progress Slider */}
             <div className="space-y-2">
               <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden shadow-inner">
-                <div 
+                <div
                   className="bg-indigo-500 h-full rounded-full transition-all duration-300 shadow-md"
                   style={{ width: `${trainingProgress}%` }}
                 />

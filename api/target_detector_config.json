@@ -1,0 +1,36 @@
+{
+  "weights": {
+    "name_match": 0.30,
+    "position": 0.10,
+    "cardinality": 0.20,
+    "missingness": 0.10,
+    "dependency": 0.20,
+    "semantic": 0.10
+  },
+  "keywords": [
+    "target",
+    "label",
+    "class",
+    "y",
+    "outcome",
+    "response",
+    "churn",
+    "price",
+    "default",
+    "fraud",
+    "survived",
+    "value",
+    "cost",
+    "revenue",
+    "sales",
+    "profit",
+    "status",
+    "category",
+    "target_class",
+    "ebitda",
+    "ebidta",
+    "margin",
+    "income",
+    "earnings"
+  ]
+}

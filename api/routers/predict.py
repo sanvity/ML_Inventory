@@ -2,6 +2,7 @@
 
 import math
 import statistics
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -17,12 +18,12 @@ router = APIRouter()
 class PredictRequest(BaseModel):
     session_id:  str
     input_data:  dict
-    model_id:    str | None = None
+    model_id:    Optional[str] = None
 
 
 class BatchPredictRequest(BaseModel):
     session_id: str
-    model_id:   str | None = None
+    model_id:   Optional[str] = None
 
 
 @router.post("/predict")

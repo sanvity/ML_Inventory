@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.db import create_tables
-from api.routers import column_stats, history, predict, train, upload
+from api.routers import auth, column_stats, history, predict, projects, train, upload
 
 
 @asynccontextmanager
@@ -36,10 +36,12 @@ app.add_middleware(
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
+app.include_router(auth.router,         prefix="/api/auth", tags=["Auth"])
 app.include_router(upload.router,       prefix="/api", tags=["Upload"])
 app.include_router(train.router,        prefix="/api", tags=["Training"])
 app.include_router(predict.router,      prefix="/api", tags=["Prediction"])
 app.include_router(history.router,      prefix="/api", tags=["History"])
+app.include_router(projects.router,     prefix="/api", tags=["Projects"])
 app.include_router(column_stats.router, prefix="/api", tags=["Stats"])
 
 

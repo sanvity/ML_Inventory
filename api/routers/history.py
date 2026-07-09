@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,19 +14,27 @@ router = APIRouter()
 
 
 class RunCreate(BaseModel):
-    modality:      str | None = None
+    modality:      Optional[str] = None
     model_name:    str
-    dataset_name:  str | None = None
-    target_column: str | None = None
-    feature_count: int | None = None
-    metrics:       dict | None = None
-    config:        dict | None = None
+    dataset_name:  Optional[str] = None
+    target_column: Optional[str] = None
+    feature_count: Optional[int] = None
+    metrics:       Optional[dict] = None
+    config:        Optional[dict] = None
+    user_id:       Optional[str] = None
 
 
 @router.get("/history")
-def list_history(db: Session = Depends(get_db)):
-    """Return all saved runs, newest first."""
-    rows = db.query(RunHistory).order_by(RunHistory.created_at.desc()).all()
+def list_history(x_session_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Return all saved runs for the current user, newest first."""
+    # Get user from session
+    from api.routers.auth import get_session_user
+    session = get_session_user(x_session_id)
+    if not session:
+        return []  # Return empty if not authenticated
+    
+    # Filter by user_id
+    rows = db.query(RunHistory).filter(RunHistory.user_id == session["user_id"]).order_by(RunHistory.created_at.desc()).all()
     return [_row_to_dict(r) for r in rows]
 
 
@@ -40,8 +48,13 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/history", status_code=201)
-def save_run(body: RunCreate, db: Session = Depends(get_db)):
+def save_run(body: RunCreate, x_session_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Save a completed training run to history."""
+    # Get user from session
+    from api.routers.auth import get_session_user
+    session = get_session_user(x_session_id)
+    user_id = session["user_id"] if session else body.user_id
+    
     run = RunHistory(
         id            = str(uuid.uuid4()),
         created_at    = datetime.utcnow(),
@@ -52,6 +65,7 @@ def save_run(body: RunCreate, db: Session = Depends(get_db)):
         feature_count = body.feature_count,
         metrics       = body.metrics,
         config        = body.config,
+        user_id       = user_id,
     )
     db.add(run)
     db.commit()
@@ -81,4 +95,6 @@ def _row_to_dict(row: RunHistory) -> dict:
         "feature_count": row.feature_count,
         "metrics":       row.metrics,
         "config":        row.config,
+        "model_artifact": row.model_artifact,
+        "user_id":       row.user_id,
     }

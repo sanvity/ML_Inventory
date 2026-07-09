@@ -3,9 +3,9 @@ Pluggable Model Registry — adapter pattern for ML models.
 Every model implements the ModelAdapter interface.
 New models can be registered via ModelRegistry.register() without UI changes.
 """
-
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 
 class ModelAdapter(ABC):
@@ -47,7 +47,7 @@ class ModelRegistry:
         cls._adapters[adapter.model_id] = adapter
 
     @classmethod
-    def get(cls, model_id: str) -> ModelAdapter | None:
+    def get(cls, model_id: str) -> Optional[ModelAdapter]:
         return cls._adapters.get(model_id)
 
     @classmethod

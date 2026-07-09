@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 ML Prediction Backend — Flask API
 Handles CSV ingestion, model training, prediction, and feature importance.
 """
+
 
 import io
 import json
@@ -15,7 +17,9 @@ from collections import defaultdict
 from datetime import datetime
 
 import numpy as np
-from db import RunHistory, SessionLocal, create_tables
+import secrets
+from db import RunHistory, SessionLocal, User, create_tables
+from werkzeug.security import generate_password_hash, check_password_hash
 import pandas as pd
 from flask import Flask, jsonify, request
 from scipy import stats
@@ -33,6 +37,111 @@ app = Flask(__name__)
 # ── In-memory session store ──────────────────────────────────────────────────
 sessions: dict = {}         # session_id → {df, config, models, results, …}
 training_progress: dict = {}  # session_id → {model_name: {pct, status, metrics}}
+
+# ── User authentication session store ─────────────────────────────────────────
+auth_sessions: dict = {}    # session_token → {user_id, username, last_activity}
+
+def create_session(user_id: str, username: str) -> str:
+    token = secrets.token_hex(32)
+    auth_sessions[token] = {
+        "user_id": user_id,
+        "username": username,
+        "last_activity": time.time()
+    }
+    return token
+
+def get_session_user(token: str | None) -> dict | None:
+    if not token or token not in auth_sessions:
+        return None
+    session = auth_sessions[token]
+    # Check if expired (24h = 86400 seconds)
+    if time.time() - session["last_activity"] > 86400:
+        del auth_sessions[token]
+        return None
+    # Update activity
+    session["last_activity"] = time.time()
+    return session
+
+@app.before_request
+def gate_routes():
+    if request.method == "OPTIONS":
+        return
+    if request.path.startswith("/api/") and not request.path.startswith("/api/auth/"):
+        token = request.headers.get("X-Session-ID")
+        session = get_session_user(token)
+        if not session:
+            return jsonify({"error": "Unauthorized"}), 401
+
+@app.route("/api/auth/signup", methods=["POST"])
+def auth_signup():
+    data = request.json or {}
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        return jsonify({"error": "Username and password are required."}), 400
+        
+    db = SessionLocal()
+    try:
+        # Check if user already exists
+        existing_user = db.query(User).filter(User.username == username).first()
+        if existing_user:
+            return jsonify({"error": "Username already exists."}), 400
+            
+        password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+        new_user = User(username=username, password_hash=password_hash)
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        token = create_session(new_user.id, new_user.username)
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": new_user.id,
+                "username": new_user.username
+            }
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": "Internal server error."}), 500
+    finally:
+        db.close()
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.json or {}
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        return jsonify({"error": "Username and password are required."}), 400
+        
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user or not check_password_hash(user.password_hash, password):
+            return jsonify({"error": "Invalid credentials."}), 401
+            
+        token = create_session(user.id, user.username)
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": user.id,
+                "username": user.username
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": "Internal server error."}), 500
+    finally:
+        db.close()
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    token = request.headers.get("X-Session-ID")
+    if token in auth_sessions:
+        del auth_sessions[token]
+    return jsonify({"success": True})
 
 
 # ── CORS helper (no external package needed) ─────────────────────────────────
@@ -1186,8 +1295,12 @@ def column_stats(sid):
 @app.route("/api/history", methods=["GET"])
 def get_history_list():
     try:
+        token = request.headers.get("X-Session-ID")
+        session = get_session_user(token)
+        user_id = session["user_id"] if session else None
+        
         db = SessionLocal()
-        rows = db.query(RunHistory).order_by(RunHistory.created_at.desc()).all()
+        rows = db.query(RunHistory).filter(RunHistory.user_id == user_id).order_by(RunHistory.created_at.desc()).all()
         return jsonify([
             {
                 "id":            r.id,
@@ -1199,6 +1312,9 @@ def get_history_list():
                 "feature_count": r.feature_count,
                 "metrics":       r.metrics,
                 "config":        r.config,
+                "model_artifact": r.model_artifact,
+                "seasonal_vector": r.seasonal_vector,
+                "scale_factor":  r.scale_factor,
             }
             for r in rows
         ])
@@ -1208,11 +1324,64 @@ def get_history_list():
         db.close()
 
 
+@app.route("/api/history", methods=["POST"])
+def save_history_run():
+    try:
+        token = request.headers.get("X-Session-ID")
+        session = get_session_user(token)
+        user_id = session["user_id"] if session else None
+
+        body = request.get_json() or {}
+        db = SessionLocal()
+        
+        run = RunHistory(
+            id            = str(uuid.uuid4()),
+            created_at    = datetime.utcnow(),
+            modality      = body.get("modality"),
+            model_name    = body.get("model_name"),
+            dataset_name  = body.get("dataset_name"),
+            target_column = body.get("target_column"),
+            feature_count = body.get("feature_count"),
+            metrics       = body.get("metrics"),
+            config        = body.get("config"),
+            user_id       = user_id,
+            model_artifact = body.get("model_artifact"),
+            seasonal_vector = body.get("seasonal_vector"),
+            scale_factor  = body.get("scale_factor"),
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        
+        return jsonify({
+            "id":            run.id,
+            "created_at":    run.created_at.isoformat() if run.created_at else None,
+            "modality":      run.modality,
+            "model_name":    run.model_name,
+            "dataset_name":  run.dataset_name,
+            "target_column": run.target_column,
+            "feature_count": run.feature_count,
+            "metrics":       run.metrics,
+            "config":        run.config,
+            "model_artifact": run.model_artifact,
+            "seasonal_vector": run.seasonal_vector,
+            "scale_factor":  run.scale_factor,
+        }), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
 @app.route("/api/history/<run_id>", methods=["GET"])
 def get_history_detail(run_id):
     try:
+        token = request.headers.get("X-Session-ID")
+        session = get_session_user(token)
+        user_id = session["user_id"] if session else None
+
         db = SessionLocal()
-        run = db.query(RunHistory).filter(RunHistory.id == run_id).first()
+        run = db.query(RunHistory).filter(RunHistory.id == run_id, RunHistory.user_id == user_id).first()
         if not run:
             return jsonify({"error": "Run not found."}), 404
         return jsonify({
@@ -1225,6 +1394,9 @@ def get_history_detail(run_id):
             "feature_count": run.feature_count,
             "metrics":       run.metrics,
             "config":        run.config,
+            "model_artifact": run.model_artifact,
+            "seasonal_vector": run.seasonal_vector,
+            "scale_factor":  run.scale_factor,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1235,8 +1407,12 @@ def get_history_detail(run_id):
 @app.route("/api/history/<run_id>", methods=["DELETE"])
 def delete_history_run(run_id):
     try:
+        token = request.headers.get("X-Session-ID")
+        session = get_session_user(token)
+        user_id = session["user_id"] if session else None
+
         db = SessionLocal()
-        run = db.query(RunHistory).filter(RunHistory.id == run_id).first()
+        run = db.query(RunHistory).filter(RunHistory.id == run_id, RunHistory.user_id == user_id).first()
         if not run:
             return jsonify({"error": "Run not found."}), 404
         db.delete(run)

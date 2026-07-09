@@ -3,7 +3,7 @@ Feature selection and engineering pipeline.
 Implements the following flow:
 Feature Generation → Variance Threshold → Correlation Filter → Mutual Information → LightGBM (first-pass) → SHAP
 """
-
+from __future__ import annotations
 import math
 import numpy as np
 import pandas as pd

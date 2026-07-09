@@ -1,4 +1,5 @@
 """Train router — handles training, progress polling, and results."""
+from __future__ import annotations
 
 import math
 import threading

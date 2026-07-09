@@ -713,10 +713,10 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
             setFI(rd.feature_importance ?? []);
             setForecast(rd.forecast ?? []);
             setPipelineReport(rd.feature_pipeline_report ?? null);
-            setTimeout(() => setPhase('results'), 600);
+            setPhase('results');
           }
         } catch (_) {}
-      }, 500);
+      }, 100);
     } catch (e) {
       setError(e.message);
       clearInterval(msgRef.current);

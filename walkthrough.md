@@ -23,6 +23,7 @@ This document details the modifications and implementations completed on the Int
 
 ### 2. Grouping Aggregations (Page 2)
 - Implemented a searchable, dynamic Group By multi-select chips dropdown populated from all dataset columns.
+- **Dynamic Year + Month Virtual Column:** When the dataset is loaded, if a datetime column (or separate Year and Month columns) exists, the engine dynamically injects a virtual `"Year + Month"` column (e.g. mapping dates to `YYYY-MM` format). This column is automatically available as a Group By selection, enabling users to easily group transactional or daily records into monthly buckets.
 - Group By columns are automatically excluded from aggregation mapping, resetting to default functions when removed.
 - Refined the Pandas syntax preview for dynamic groupby aggregations.
 
@@ -263,4 +264,162 @@ All assertions passed, verifying the semantic and statistical robustness of the 
   - Dynamically formatted label keys to `YYYY-MM` (e.g. `2024-03`) for the forecasting chart when the combined sorting option is active.
 - **Backend Alignment**:
   - Expanded `detect_calendar_columns` and chronological sort sequences in both [utils.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/api/utils.py) and [ml_backend.py](file:///Users/sanvijain/Downloads/ML_Inventory-1d77b53efe243f9ca5ff361604bdd2af875811a5/ml/ml_backend.py) to support `date` and `timestamp` keys.
+
+### 8. Page 3: Data Quality Intelligence Integration
+- **Three Pillar Assessment**:
+  - Added real-time score calculations (0–100) for **Granularity** (cardinality ratio and grain regularities), **Historicity** (data freshness, coverage span, and chronological null rate degradation), and **Value** (null ratios, business rules, and stability baseline checks).
+  - Prominently displays an aggregate **Forecasting Readiness Score** with corresponding readiness badges.
+  - **Pillar Impact Guide**: Created an explanatory glossary card explaining what Granularity, Historicity, and Value represent and exactly how their variations impact modeling metrics, overfitting risks, and weight adjustments.
+- **Unified Profiling Module (`datasetProfiler`)**:
+  - Encapsulates chronological data sorting, multi-feature anomaly detection, and three-pillar scoring in a single, reusable module. All downstream views (the time-series charts, anomaly logs, and pillar reports) consume this single module's output to prevent redundant calculations and ensure data consistency.
+  - **Single Chronological Sort:** The dataset is sorted ascending on the chronological index **exactly once** during initialization. All subsequent sequential checks, score calculations, and Recharts line graph plots read directly from this single sorted reference frame.
+  - **Split Anomaly Scans:**
+    - *Order-Sensitive:* Null Spikes and Flatlines scan the pre-sorted array sequentially to identify chronological patterns (5+ consecutive nulls or repeating values).
+    - *Order-Independent:* Outlier checks (Z-Score and IQR) calculate distribution parameters (mean, standard deviation, quartiles) across the global values first, which is order-independent, and map them back to rows.
+  - **Location Row Pointers:** The "Location" column in the tables refers explicitly to the **original upload row index** (1-indexed) rather than the post-sort array offset. This allows users to easily locate the bad record in their raw spreadsheet source files. Cleanup actions filter/map by comparing `row.__originalIdx` directly to prevent offset mismatch issues on sorted arrays.
+  - **Spotlight Panel**: Features a high-visibility card highlighting the single **most significant active anomaly** detected in the current dataset (sorted by High severity, then Z-score deviation), suggesting the recommended mitigation action and providing single-click Impute or Quarantine buttons.
+- **Interactive Action Panel & Collective Operations**:
+  - Enabled direct cleaning capabilities: **Quarantine** (excludes row), **Impute** (substitutes values dynamically), **Alert** (logs notifications), and **Ignore** (dismisses with reason).
+  - Added **Collective Operations** buttons to resolve active anomalies at scale:
+    - **Impute All:** Dynamically calculates medians/modes for all active anomalies and fills them simultaneously.
+    - **Quarantine All:** Removes all row records containing active anomalies in a single operation.
+    - **Ignore All:** Globally dismisses all active anomalies with a logged collective justification reason.
+  - Updates the data model in state in real-time, instantly refreshing the pillar scores.
+- **Aggregation Sequence & Order of Operations**:
+  - Implemented the exact order requested: **Outlier and anomaly detection is run on the raw, unaggregated records first**, allowing users to identify, inspect, and fix individual anomalies in their raw form.
+  - **Re-Aggregation:** Once raw entries are resolved (imputed or quarantined), the dataset is dynamically re-aggregated on the fly before calculations are run or sent further down the pipeline (ensuring Page 4 model training and metrics consume the final, aggregated version of the cleaned dataset).
+- **Proceed Gate & Blockers Checklist**:
+  - Blocks model training if the readiness score is below 70.
+  - Dynamically evaluates all failed assessment pillars (< 70) and prints a dedicated checklist of **mandatory, actionable required fixes** (e.g. enabling Page 2 aggregation to resolve granularity, using bulk cleaning to fix value completeness).
+- **Page 4 Data Quality Contextual Advisory**:
+  - Shuffled the old Page 3 (model testing) to Page 4.
+  - Appended the quality report and audit trail to Page 4, warning users when prediction confidence is high but historicity is low or granularity is questionable.
+- **Horizontal Progress Flowchart Navigation**:
+  - Replaced the simple textual page numbers in the top header with a sleek **horizontal flowchart progress bar**.
+  - Displays all pipeline stages visually: **Data Setup ➔ Pre-process ➔ Quality Audit ➔ Model Testing**.
+  - Connective lines are color-coded based on wizard status (Emerald for completed, Indigo for active).
+  - Supports **clickable step navigation** enabling users to jump directly to any unlocked stage (based on validation rules) instead of paging sequentially.
+  - Responsive design hides labels on mobile screens to preserve layout density.
+- **Robust Date Parsing & State Sync**:
+  - **Regional Date Parser (`parseChronologicalDate`):** Introduced a flexible date-parsing function capable of handling standard ISO (`YYYY-MM-DD`), European/British (`DD/MM/YYYY`, `DD-MM-YYYY`), and dot-separated (`DD.MM.YYYY`) formats. This prevents sorting failures when files containing custom date strings are uploaded.
+  - **DQI State Sync:** Added parameter shift tracking via `dqiInitializedFor`. If the user goes back to Page 2, alters the target/date columns, and returns to Page 3, the DQI pipeline re-initializes and re-sorts automatically. If they remain on Page 3 to impute/quarantine anomalies, their corrections are protected and not reset.
+  - **Global chronological sort:** The entire dataset is sorted ascending by Year-Month/Date inside `addYearMonthVirtualColumn` immediately upon dataset loading or upload. This ensures that Page 2 preprocessing, Page 3 Quality Audit, and Page 4 model training naturally consume clean chronological datasets from the outset.
+- **Custom Chronological Chart Tooltip & Pointer:**
+  - Designed and implemented a premium dark custom tooltip component for the Recharts line graph.
+  - When hovered, the tooltip pointer maps and displays the original upload row index (`Row X`) alongside the Year-Month value (e.g. `2024-06`), aligning hover locations with physical record pointers.
+  - Integrates an animated warning indicator (`animate-pulse` pink badge) that highlights flagged anomalies dynamically under the cursor.
+
+---
+
+## Restructuring Tab Navigation and Page Content Layout (Current Session)
+
+We have successfully restructured the application interface from a complex 10-step wizard layout into a clean, modern, and intuitive 3-Main-Tab structure with nested Subtabs, and reorganized the page components to maximize usable area and improve data flow.
+
+### 1. Two-Tier Navigation Bar
+- **Flowchart Wizard Removal**: Removed the old 10-step flowchart wizard indicator header entirely.
+- **Top-Tier Tabs (Main Tabs)**: Created three prominent, visually styled main tabs:
+  1. **Ingestion Tab**: Focuses on data upload, exploratory visualization, quality auditing, and target selection. (Defaults to Ingestion subtab)
+  2. **Feature Tab**: Handles feature selection, data cleaning recommendations, split configs, anomaly checks, and timeline grain aggregation. (Defaults to Feature Selection subtab)
+  3. **Model Tab**: Orchestrates model selection, hyperparameter tuning settings, background training, and predictions evaluation. (Defaults to Model Tuning subtab)
+- **Second-Tier Tabs (Subtabs)**: Renders a nested horizontal row of pill-styled buttons mapping directly to specific pages:
+  - **Ingestion Tab** subtabs:
+    - *Ingestion and Exploratory* (`page === 1`)
+    - *Data Audit* (`page === 2`)
+    - *Target Selection* (`page === 3`)
+  - **Feature Tab** subtabs:
+    - *Feature Selection* (`page === 7`)
+    - *Data Cleaning* (`page === 6`)
+    - *Anomaly Detection* (`page === 5`)
+    - *Aggregation* (`page === 4`)
+  - **Model Tab** subtabs:
+    - *Model Selection & Tuning* (`page === 8`/`page === 9`)
+    - *Results* (`page === 10`)
+- **Strict Prerequisite Lockings**: Preserved the progressive validation logic. Clicking future tabs is disabled until predecessor prerequisites (e.g., target selection confirmation or training outputs availability) are satisfied.
+
+### 2. Tab Navigation Sequence Alignment
+- Re-programmed the bottom Back and Proceed buttons on all pages (pages 1 to 10) to traverse the custom path order: `PAGE_SEQUENCE = [1, 2, 3, 7, 6, 5, 4, 8, 9, 10]`.
+- Replaced hardcoded `setPage(N)` calls in button handlers with `handlePrevPage()` and `handleNextPage()` to naturally trace through the custom sequence.
+- Updated button labels to accurately display the target page name in the customized sequence (e.g., Target Selection page proceeds to "Feature Selection" instead of "Aggregation").
+
+### 3. Page Rendering Splits and Merges
+- **Expanded Quality Audit View (`page === 2`)**: Re-coded the page 2 grid. Removed the right-column cleaning findings block, letting the Data Quality Pillars (Readiness, Value, Historicity, and Granularity scorecards) scale dynamically in a clean 4-column row across the entire width of the container.
+- **Combined Data Cleaning & Split View (`page === 6`)**: Re-coded the page 6 grid to merge the target-agnostic Pre-Target Data Cleaning Actions findings list side-by-side with the Train/Test Split configuration panel. Users can accept or reject cleaning findings and modify partition strategies simultaneously.
+
+### 4. Build and Compilation Verification
+- Ran Vite production bundler (`npm run build`) to ensure all JSX edits and styling tokens compile successfully.
+- Bundler completed successfully with **zero compilation warnings or syntax errors**.
+
+---
+
+## Homepage Navigation Autosave & Related Bug Fixes (Current Session)
+
+We have successfully implemented the autosave-on-homepage-navigation mechanism for the ML Playground save/load system along with several key validation and state fixes.
+
+### 1. Global Navigation Exit Autosave
+- **Navigation Visibility**: Changed the "Back to Projects" button in the top navigation header to render dynamically on all pages except the projects homepage (`!isMyProjectsPage`). This allows both new and existing project sessions to navigate back to "My Projects" at any point.
+- **Progress-Based Guard**: Prevented autosaving blank projects by only triggering saves when a dataset is loaded and progress is past the first step (`page > 1`).
+- **Completion Check & Guard**: Exited completed projects directly without saving via the exit navigation path, preventing duplicate re-saves or overwriting completed database records with stale exit states.
+- **Intelligent Naming**: Defaults to the current project's name or generates a timestamped fallback name: `Untitled Project — {date/time}`.
+
+### 2. Duplication Prevention (Bug Fix 4)
+- **ID State Persistence**: Ensured `saveProject` stores the returned database project ID and name in React state (`currentProjectId` and `currentProjectName`) on both POST (creation) and PUT (updating). This ensures subsequent exits/saves update the existing database record rather than duplicating it.
+
+### 3. Completed Projects Handling (Bug Fix 5)
+- **Automatic Training Completion Save**: Placed an explicit database save call (`completed = 1`) directly in the training completion handler when a model finishes training. This guarantees newly trained projects immediately register as completed and are visible in "Saved Projects" without requiring exit triggers.
+
+### 4. Step/Page Persistence on Reload (Bug Fix 3)
+- **State Restoring**: Enhanced project reload actions ("View Results" and "Modify") to completely restore `trainingResults` (via `setTrainingResults(data.results_data || null)`) ensuring chart visualizations and diagnostics render accurately.
+- **Dynamic Step Resume**: For in-progress projects, reload operations dynamically determine and resume at the project's saved page number (`state.currentPage || 1`) rather than forcing the starting page.
+
+### 5. Completion State Leakage Protection (Bug Fix 1)
+- **State Cleansing**: Verified that new project creation resets all local state parameters (via `resetAllState()`), and explicitly nulls out `trainingResults` so that previous completed flags do not leak into newly started project workspaces.
+
+---
+
+## Horizontal Scaling & Clickable Logo Navigation (Current Session)
+
+We have successfully refined the platform layout width to make better use of wide screens and replaced the redundant Back button with a unified, clickable header logo link.
+
+### 1. Extended Container Scaling (Fix 1)
+- **Increased Max-Width**: Replaced all `max-w-6xl` constraints with `max-w-7xl` (1280px) on:
+  - The main page content container.
+  - The primary tab navigation wrapper.
+  - The secondary subtab navigation wrapper.
+  - The "My Projects" page layout.
+- This adjustment significantly reduces the empty horizontal space on high-resolution monitors while keeping all dashboard grids, card columns, and tabs perfectly aligned.
+
+### 2. Interactive Logo Header (Fix 2)
+- **Clickable Header**: Wrapped the brain icon and "EY ML Playground" text in a single, clickable button element.
+- **Unified Navigation Action**: Configured the logo click handler to trigger `handleExitToHomepage`, ensuring in-progress progress is automatically saved to the database on exit before returning to the dashboard.
+- **Subtle Visual Feedback**: Styled the button with `cursor-pointer`, a hover opacity state (`hover:opacity-85`), and a subtle shrink effect on click (`active:scale-[0.98]`) to match other interactive header elements.
+- **Cleanup**: Removed the redundant "Back to Projects" text button from the header, streamlining the navigation area.
+
+---
+
+## Page 1 Layout Cleanups & Target Score Normalization (Current Session)
+
+We have successfully simplified the Page 1 Data Ingestion layout and implemented a robust target recommendation score normalization scheme.
+
+### 1. Ingestion Page Layout Streamlining
+- **Subtab Removal**: Removed the inner "Explore Targets" subtab section from the Data Ingestion and Exploratory view, consolidating all exploratory tools into a single page.
+- **Direct Relationships Plotting**: Positioned the **Explore Relationships** chart section directly at the bottom of the main preview page, immediately following the columns metadata list.
+- **Redundant Proceed Button Removal**: Removed the secondary "Proceed to Target & Features" button inside the dataset preview segment, leaving a single unified "Proceed to Data Audit" CTA button at the bottom of Page 1.
+
+### 2. Target Score Normalization
+- **0-1 Score Scaling**: Modified the target column recommendation scores (both frontend calculations in `recommendTargetColumnsJS` and backend recommendations) to be scaled into a standard `0.0` to `1.0` range based on the highest scored candidate.
+- **Pre-selection of Top Recommendations**: Re-programmed the auto-selection effect to pre-select and add all candidates that score highly (`>= 85%` normalized score), enabling multi-target pipelines to be pre-configured by default.
+
+---
+
+## Uploaded Dataset Name Display Fix (Current Session)
+
+We have successfully corrected the dataset name display logic on the project dashboard.
+
+- **Resolved Placeholder bug**: Modified the project save payload builder (`saveProject`) to prioritize `dataset?.name` over `dataset?.filename`.
+- Custom uploaded files and built-in sample datasets now successfully save under their actual names (e.g. `housing`, `marketing.csv`, `operations.xlsx`) instead of displaying as `"Unknown Dataset"` on the **EY ML Studio, My Projects** page.
+
+
+
+
+
 

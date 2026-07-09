@@ -2,9 +2,11 @@
 Shared preprocessing utilities, metrics, and helpers.
 Mirrors the logic from the original ml_backend.py but as a clean module.
 """
+from __future__ import annotations
 
 import math
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -48,7 +50,7 @@ def clean_json(obj):
 
 # ── Column detection ──────────────────────────────────────────────────────────
 
-def detect_target(columns: list[str]) -> str | None:
+def detect_target(columns: list) -> Optional[str]:
     cols_lower = {c: c.lower() for c in columns}
     for kw in TARGET_KEYWORDS:
         for col, cl in cols_lower.items():

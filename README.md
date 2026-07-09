@@ -4,20 +4,22 @@ A modern, no-code machine learning playground designed to ingest raw tabular dat
 
 ---
 
-## 🎯 What the Application Achieves
+## 🎯 Key Capabilities & Features
 
-*   **Fast-Tracks Model Benchmarking:** Eliminates hours of manual boilerplate code. It allows developers and analysts to test, optimize, and cross-compare up to 13 distinct machine learning algorithms simultaneously.
-*   **Automates Data Preparation:** Solves data format and type issues out of the box by automatically classifying features, detecting calendar components, and scaling numerical inputs.
-*   **Enables Low-Code Aggregations:** Simplifies raw transactional logs by dynamically inferring correct grouping functions, categorical mappings, and pre-selecting variables for aggregations.
-*   **Integrates Production-Ready Hyperparameter Tuning:** Democratizes Bayesian optimization by embedding Optuna trials directly into the workflow, making hyperparameter tuning accessible in a few clicks.
-*   **Delivers Explainable Diagnostics:** Provides instant comparison leaderboards, SHAP feature importance charts, and residual distributions to immediately understand model decisions and performance.
-*   **Generates Exportable Pipeline Code:** Produces real-time Pandas code snippets matching the configurations applied in the UI, bridging the gap between no-code experimentation and production deployments.
+*   **Restructured Workspace Tabs:** Streamlined workflow organized into 3 main parent pipelines:
+    1.  **Data Ingestion & Quality Audit:** File uploads, sample previews, data quality inspections (null count, uniqueness, types), data preprocessing, and target/feature recommendations.
+    2.  **Feature Engineering & Pipeline Configurations:** Variable selections, class anomaly inspections, chronological/random test-train splits, and interactive feature aggregations.
+    3.  **Results & Predictions Playground:** Comparative training leaderboards (up to 13 models), residual/loss charts, exportable python pipeline code, and the interactive predictions playground.
+*   **User Login & Project Studio Dashboard:** Secure login portal with a dashboard to create new workspaces or resume/load in-progress machine learning projects.
+*   **Homepage Navigation Autosave:** Silently autosaves project settings, model training configurations, and results in real-time when returning to the dashboard.
+*   **Scenario CSV/Excel Bulk Import:** Load multiple simulation scenario records into the predictions playground via `.csv` or Excel (`.xlsx`, `.xls`) file uploads.
+*   **Normalized Target Score Recommendations:** Real-time suggestion engine mapping variables to likely target columns with normalized confidence scores (`0.0` - `1.0`), supporting single-click multi-target project initialization.
 
 ---
 
 ## 🛠️ Tech Stack
 
-*   **Frontend:** React, Vite, Tailwind CSS, Recharts
+*   **Frontend:** React, Vite, Tailwind CSS, Recharts, Lucide Icons, xlsx (SheetJS)
 *   **Backend:** FastAPI (Python), SQLite (via SQLAlchemy)
 *   **ML Engines (Backend):** scikit-learn, XGBoost, LightGBM, Optuna, Pandas, NumPy
 
@@ -26,10 +28,7 @@ A modern, no-code machine learning playground designed to ingest raw tabular dat
 ## 💻 Getting Started
 
 ### 1. Backend Setup
-1.  Navigate to the `api` workspace directory:
-    ```bash
-    cd api
-    ```
+1.  Navigate to the project root directory.
 2.  Set up a Python virtual environment and activate it:
     ```bash
     python3 -m venv venv

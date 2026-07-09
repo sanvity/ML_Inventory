@@ -6191,75 +6191,82 @@ Do you want to import the ${cleanRows.length} clean rows?`;
     return (
       <div className={darkMode ? 'dark' : ''}>
         <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans antialiased flex flex-col">
-          {/* Simple header for My Projects page */}
-          <header className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-6 py-4 flex items-center justify-between">
+          {/* Header for My Projects page */}
+          <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-6 py-3 flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-lg">
-                <Brain className="w-6 h-6" />
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-md">
+                <Brain className="w-5 h-5" />
               </div>
-              <div>
-                <span className="font-bold text-slate-800 dark:text-slate-100 text-xl tracking-tight">EY ML Studio</span>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Project Management</p>
-              </div>
+              <span className="font-bold text-slate-800 dark:text-slate-100 text-base tracking-tight">EY ML Studio</span>
             </div>
+
             <div className="flex items-center space-x-3">
-              <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-                👤 {authUsername}
-              </span>
+              {/* Light/Dark Toggle */}
               <button
-                onClick={handleLogout}
-                className="text-xs font-bold px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition"
+                onClick={() => setDarkMode(!darkMode)}
+                className="p-1.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
               >
-                Logout
+                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
+
+              <div className="flex items-center space-x-2 pl-2 border-l border-slate-200 dark:border-slate-700">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  👤 {authUsername}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="text-xs font-bold px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </header>
 
           {/* Main content */}
           <main className="flex-1 px-6 py-8">
-            <div className="max-w-7xl mx-auto w-full space-y-8">
-              <div className="bg-slate-50/40 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-                      <FolderOpen className="w-6 h-6 text-indigo-500" />
-                      <span>My Projects</span>
-                    </h2>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-                      Manage your saved ML projects
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      console.log('New Project button clicked');
-                      try {
-                        resetAllState();
-                        setIsMyProjectsPage(false);
-                        setPage(1);
-                        console.log('New Project navigation completed');
-                      } catch (error) {
-                        console.error('Error in New Project button:', error);
-                        alert('Error starting new project. Please try refreshing the page.');
-                      }
-                    }}
-                    className="flex items-center space-x-2 px-6 py-3 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-bold rounded-xl transition shadow-md"
-                  >
-                    <Plus className="w-5 h-5" />
-                    <span>New Project</span>
-                  </button>
+            <div className="w-[92%] max-w-[1920px] mx-auto space-y-8">
+              {/* Page header */}
+              <div className="flex flex-wrap justify-between items-center gap-4 border-b border-slate-150 dark:border-slate-800/60 pb-5">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-indigo-500" />
+                    <span>My Projects</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Manage and resume your saved machine learning projects
+                  </p>
                 </div>
+                <button
+                  onClick={() => {
+                    console.log('New Project button clicked');
+                    try {
+                      resetAllState();
+                      setIsMyProjectsPage(false);
+                      setPage(1);
+                      console.log('New Project navigation completed');
+                    } catch (error) {
+                      console.error('Error in New Project button:', error);
+                      alert('Error starting new project. Please try refreshing the page.');
+                    }
+                  }}
+                  className="flex items-center space-x-2 px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>New Project</span>
+                </button>
               </div>
 
               {isProjectsLoading ? (
                 <div className="text-center py-20">
-                  <div className="text-slate-400 dark:text-slate-500 text-lg">Loading projects...</div>
+                  <div className="text-slate-400 dark:text-slate-500 text-sm font-semibold animate-pulse">Loading projects...</div>
                 </div>
               ) : projects.length === 0 ? (
-                <div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl p-20 text-center">
-                  <FolderOpen className="w-24 h-24 text-slate-300 dark:text-slate-600 mx-auto mb-6" />
-                  <h3 className="text-2xl font-bold text-slate-700 dark:text-slate-300 mb-3">No projects yet</h3>
-                  <p className="text-slate-500 dark:text-slate-400 text-lg mb-8 max-w-md mx-auto">
-                    Create your first project by uploading a dataset and training models
+                <div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl p-16 text-center shadow-xs">
+                  <FolderOpen className="w-16 h-16 text-slate-300 dark:text-slate-600 mx-auto mb-4 opacity-80" />
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-2">No projects yet</h3>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs mb-6 max-w-sm mx-auto leading-relaxed">
+                    Create your first machine learning workspace by uploading a custom CSV/Excel dataset and training pipelines.
                   </p>
                   <button
                     onClick={() => {
@@ -6274,9 +6281,9 @@ Do you want to import the ${cleanRows.length} clean rows?`;
                         alert('Error starting new project. Please try refreshing the page.');
                       }
                     }}
-                    className="inline-flex items-center space-x-2 px-8 py-4 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-bold rounded-xl transition shadow-md"
+                    className="inline-flex items-center space-x-2 px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
                   >
-                    <Plus className="w-5 h-5" />
+                    <Plus className="w-4 h-4" />
                     <span>Create New Project</span>
                   </button>
                 </div>
@@ -6285,24 +6292,35 @@ Do you want to import the ${cleanRows.length} clean rows?`;
                   {projects.map(project => (
                     <div
                       key={project.id}
-                      className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl p-6 shadow-sm hover:shadow-lg transition cursor-pointer"
+                      className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800/85 rounded-2xl p-5 shadow-xs hover:shadow-md hover:border-slate-250 dark:hover:border-slate-700 transition duration-155 cursor-pointer flex flex-col justify-between min-h-[140px]"
                       onClick={() => {
                         setSelectedProjectForAction(project);
                         setShowProjectActionDialog(true);
                       }}
                     >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex-1">
-                          <h3 className="text-base font-bold text-slate-700 dark:text-slate-300 mb-2">{project.name}</h3>
-                          <p className="text-sm text-slate-500 dark:text-slate-400">{project.dataset_name}</p>
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 line-clamp-1 flex-1 leading-snug">{project.name}</h3>
+                          <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500 mt-0.5 whitespace-nowrap">
+                            {new Date(project.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                          </span>
                         </div>
-                        <div className="text-xs text-slate-400 dark:text-slate-500">
-                          {new Date(project.created_at).toLocaleDateString()}
-                        </div>
+                        <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">
+                          📁 {project.dataset_name}
+                        </p>
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                        <span className="bg-indigo-50 dark:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-lg font-semibold">
-                          {project.instance_count} instance{project.instance_count !== 1 ? 's' : ''}
+                      
+                      <div className="flex items-center justify-between pt-4 mt-auto border-t border-slate-100/50 dark:border-slate-800/30">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50/60 dark:bg-indigo-950/20 text-indigo-650 dark:text-indigo-400 border border-indigo-100/20 dark:border-indigo-900/10">
+                          {project.instance_count} model instance{project.instance_count !== 1 ? 's' : ''}
+                        </span>
+                        
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                          project.completed === 1 
+                            ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 border border-emerald-100/20 dark:border-emerald-900/10'
+                            : 'bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 border border-amber-100/20 dark:border-amber-900/10'
+                        }`}>
+                          {project.completed === 1 ? 'completed' : 'in progress'}
                         </span>
                       </div>
                     </div>
@@ -6314,21 +6332,21 @@ Do you want to import the ${cleanRows.length} clean rows?`;
 
           {/* Project Action Dialog */}
           {showProjectActionDialog && selectedProjectForAction && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-xs">
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-6"
+                className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-5 animate-scale-in"
               >
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-2">
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-1 leading-snug">
                     {selectedProjectForAction.name}
                   </h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    {selectedProjectForAction.dataset_name} · {selectedProjectForAction.instance_count} instance{selectedProjectForAction.instance_count !== 1 ? 's' : ''}
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 leading-normal">
+                    📁 {selectedProjectForAction.dataset_name} · {selectedProjectForAction.instance_count} model instance{selectedProjectForAction.instance_count !== 1 ? 's' : ''}
                   </p>
                 </div>
                 
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   <button
                     onClick={async () => {
                       setShowProjectActionDialog(false);
@@ -6368,7 +6386,7 @@ Do you want to import the ${cleanRows.length} clean rows?`;
                         setIsModifyMode(false);
                       }
                     }}
-                    className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-bold rounded-lg transition shadow-md"
+                    className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
                   >
                     <BarChart2 className="w-4 h-4" />
                     <span>View Results</span>
@@ -6413,10 +6431,10 @@ Do you want to import the ${cleanRows.length} clean rows?`;
                         setIsModifyMode(true);
                       }
                     }}
-                    className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold rounded-lg transition shadow-md"
+                    className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
                   >
                     <Settings className="w-4 h-4" />
-                    <span>Modify</span>
+                    <span>Modify Project</span>
                   </button>
                 </div>
                 
@@ -6425,7 +6443,7 @@ Do you want to import the ${cleanRows.length} clean rows?`;
                     setShowProjectActionDialog(false);
                     setSelectedProjectForAction(null);
                   }}
-                  className="w-full text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 font-semibold"
+                  className="w-full text-[11px] uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-bold mt-2 cursor-pointer transition"
                 >
                   Cancel
                 </button>
@@ -6665,7 +6683,7 @@ Do you want to import the ${cleanRows.length} clean rows?`;
           <nav className="sticky top-[57px] z-30 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 shadow-xs">
             {/* Primary Main Tabs Bar */}
             <div className="border-b border-slate-100 dark:border-slate-800 px-6 bg-slate-50/50 dark:bg-slate-900/50">
-              <div className="max-w-7xl mx-auto flex items-center gap-2">
+              <div className="w-[92%] max-w-[1920px] mx-auto flex items-center gap-2">
                 {mainTabs.map((mt) => {
                   const isActive = activeTab === mt.id;
                   const isEnabled = isTabEnabled(mt.id);
@@ -6695,7 +6713,7 @@ Do you want to import the ${cleanRows.length} clean rows?`;
 
             {/* Secondary Subtabs Bar */}
             <div className="px-6 py-2.5 bg-white dark:bg-slate-900">
-              <div className="max-w-7xl mx-auto flex items-center gap-2 flex-wrap">
+              <div className="w-[92%] max-w-[1920px] mx-auto flex items-center gap-2 flex-wrap">
                 {SUBTABS_CONFIG[activeTab].map((st) => {
                   const isActive = activeSubTabId === st.id;
                   const isEnabled = isSubTabEnabled(st.id);
@@ -6729,7 +6747,7 @@ Do you want to import the ${cleanRows.length} clean rows?`;
           MAIN PAGE CONTENT CONTAINERS
          ========================================== */}
       <main className="flex-1 overflow-y-auto px-6 py-8">
-        <div className="max-w-7xl mx-auto w-full space-y-8 animate-fade-in">
+        <div className="w-[92%] max-w-[1920px] mx-auto space-y-8 animate-fade-in">
 
           {/* ==========================================
               PAGE 1: DATA & MODEL SELECTION

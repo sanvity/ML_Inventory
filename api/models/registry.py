@@ -277,11 +277,267 @@ def _try_register_catboost():
         pass
 
 
+# ── Time-series / Forecasting estimators ──────────────────────────────────────
+
+class ARIMAEstimator:
+    def __init__(self, p=1, d=1, q=1):
+        self.p = int(p)
+        self.d = int(d)
+        self.q = int(q)
+        self.model_fit = None
+
+    def fit(self, X, y):
+        import numpy as np
+        from statsmodels.tsa.arima.model import ARIMA
+        try:
+            self.model_fit = ARIMA(y, order=(self.p, self.d, self.q)).fit()
+        except Exception:
+            try:
+                self.model_fit = ARIMA(y, order=(1, 1, 0)).fit()
+            except Exception:
+                self.model_fit = ARIMA(y, order=(1, 0, 0)).fit()
+        return self
+
+    def predict(self, X):
+        import numpy as np
+        if self.model_fit is not None:
+            pred = self.model_fit.predict(start=0, end=len(X) - 1)
+            if len(pred) < len(X):
+                pred = np.pad(pred, (0, len(X) - len(pred)), mode='edge')
+            elif len(pred) > len(X):
+                pred = pred[:len(X)]
+            return np.nan_to_num(pred, nan=0.0)
+        return np.zeros(len(X))
+
+    def forecast(self, steps=10, alpha=0.05):
+        if self.model_fit is not None:
+            try:
+                forecast_res = self.model_fit.get_forecast(steps=steps)
+                mean = forecast_res.predicted_mean
+                conf = forecast_res.conf_int(alpha=alpha)
+                if hasattr(conf, 'iloc'):
+                    lower = conf.iloc[:, 0].values.tolist()
+                    upper = conf.iloc[:, 1].values.tolist()
+                else:
+                    lower = conf[:, 0].tolist()
+                    upper = conf[:, 1].tolist()
+                return mean.tolist(), lower, upper
+            except Exception:
+                pass
+        return [0.0]*steps, [0.0]*steps, [0.0]*steps
+
+
+class SARIMAEstimator:
+    def __init__(self, p=1, d=1, q=1, P=1, D=1, Q=1, s=12):
+        self.p = int(p)
+        self.d = int(d)
+        self.q = int(q)
+        self.P = int(P)
+        self.D = int(D)
+        self.Q = int(Q)
+        self.s = int(s)
+        self.model_fit = None
+
+    def fit(self, X, y):
+        import numpy as np
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+        try:
+            self.model_fit = SARIMAX(
+                y,
+                order=(self.p, self.d, self.q),
+                seasonal_order=(self.P, self.D, self.Q, self.s),
+                enforce_stationarity=False,
+                enforce_invertibility=False
+            ).fit(disp=False)
+        except Exception:
+            try:
+                self.model_fit = SARIMAX(
+                    y,
+                    order=(1, 1, 0),
+                    seasonal_order=(0, 0, 0, 0),
+                    enforce_stationarity=False
+                ).fit(disp=False)
+            except Exception:
+                from statsmodels.tsa.arima.model import ARIMA
+                self.model_fit = ARIMA(y, order=(1, 0, 0)).fit()
+        return self
+
+    def predict(self, X):
+        import numpy as np
+        if self.model_fit is not None:
+            pred = self.model_fit.predict(start=0, end=len(X) - 1)
+            if len(pred) < len(X):
+                pred = np.pad(pred, (0, len(X) - len(pred)), mode='edge')
+            elif len(pred) > len(X):
+                pred = pred[:len(X)]
+            return np.nan_to_num(pred, nan=0.0)
+        return np.zeros(len(X))
+
+    def forecast(self, steps=10, alpha=0.05):
+        if self.model_fit is not None:
+            try:
+                forecast_res = self.model_fit.get_forecast(steps=steps)
+                mean = forecast_res.predicted_mean
+                conf = forecast_res.conf_int(alpha=alpha)
+                if hasattr(conf, 'iloc'):
+                    lower = conf.iloc[:, 0].values.tolist()
+                    upper = conf.iloc[:, 1].values.tolist()
+                else:
+                    lower = conf[:, 0].tolist()
+                    upper = conf[:, 1].tolist()
+                return mean.tolist(), lower, upper
+            except Exception:
+                pass
+        return [0.0]*steps, [0.0]*steps, [0.0]*steps
+
+
+class ARIMAXEstimator:
+    def __init__(self, p=1, d=1, q=1, P=0, D=0, Q=0, s=0):
+        self.p = int(p)
+        self.d = int(d)
+        self.q = int(q)
+        self.P = int(P)
+        self.D = int(D)
+        self.Q = int(Q)
+        self.s = int(s)
+        self.model_fit = None
+        self.X_mean = None
+
+    def fit(self, X, y):
+        import numpy as np
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+        
+        # Check if X is empty (no features selected)
+        if X is None or len(X) == 0 or (hasattr(X, 'shape') and (len(X.shape) < 2 or X.shape[1] == 0)):
+            raise ValueError("ARIMAX requires at least one exogenous feature column. Please select feature columns.")
+            
+        self.X_mean = np.mean(X, axis=0)
+        seasonal_order = (self.P, self.D, self.Q, self.s) if self.s > 0 else (0, 0, 0, 0)
+        
+        try:
+            self.model_fit = SARIMAX(
+                y,
+                exog=X,
+                order=(self.p, self.d, self.q),
+                seasonal_order=seasonal_order,
+                enforce_stationarity=False,
+                enforce_invertibility=False
+            ).fit(disp=False)
+        except Exception:
+            try:
+                self.model_fit = SARIMAX(
+                    y,
+                    exog=X,
+                    order=(1, 1, 0),
+                    seasonal_order=(0, 0, 0, 0),
+                    enforce_stationarity=False
+                ).fit(disp=False)
+            except Exception as e:
+                raise ValueError(f"ARIMAX model fitting failed: {e}")
+        return self
+
+    def predict(self, X):
+        import numpy as np
+        if self.model_fit is not None:
+            pred = self.model_fit.predict(start=0, end=len(X) - 1, exog=X)
+            if len(pred) < len(X):
+                pred = np.pad(pred, (0, len(X) - len(pred)), mode='edge')
+            elif len(pred) > len(X):
+                pred = pred[:len(X)]
+            return np.nan_to_num(pred, nan=0.0)
+        return np.zeros(len(X))
+
+    def forecast(self, steps=10, alpha=0.05):
+        import numpy as np
+        if self.model_fit is not None:
+            try:
+                if self.X_mean is not None:
+                    exog = np.repeat(self.X_mean[np.newaxis, :], steps, axis=0)
+                else:
+                    raise ValueError("No historical exogenous mean calculated during fit.")
+                    
+                forecast_res = self.model_fit.get_forecast(steps=steps, exog=exog)
+                mean = forecast_res.predicted_mean
+                conf = forecast_res.conf_int(alpha=alpha)
+                if hasattr(conf, 'iloc'):
+                    lower = conf.iloc[:, 0].values.tolist()
+                    upper = conf.iloc[:, 1].values.tolist()
+                else:
+                    lower = conf[:, 0].tolist()
+                    upper = conf[:, 1].tolist()
+                return mean.tolist(), lower, upper
+            except Exception:
+                pass
+        return [0.0]*steps, [0.0]*steps, [0.0]*steps
+
+
+class ARIMAAdapter(ModelAdapter):
+    model_id = "arima_time"
+
+    def make_model(self, params):
+        p = params.get("p", 1)
+        d = params.get("d", 1)
+        q = params.get("q", 1)
+        return ARIMAEstimator(p=p, d=d, q=q)
+
+    def suggest_params(self, trial) -> dict:
+        return {}
+
+
+class ProphetAdapter(ModelAdapter):
+    # Registered as prophet_time to match the frontend ID for Prophet Forecasting
+    model_id = "prophet_time"
+
+    def make_model(self, params):
+        p = params.get("p", 1)
+        d = params.get("d", 1)
+        q = params.get("q", 1)
+        return SARIMAEstimator(p=p, d=d, q=q, P=1, D=1, Q=1, s=12)
+
+    def suggest_params(self, trial) -> dict:
+        return {}
+
+
+class SARIMAAdapter(ModelAdapter):
+    model_id = "sarima_time"
+
+    def make_model(self, params):
+        p = params.get("p", 1)
+        d = params.get("d", 1)
+        q = params.get("q", 1)
+        P = params.get("P", 1)
+        D = params.get("D", 1)
+        Q = params.get("Q", 1)
+        s = params.get("s", 12)
+        return SARIMAEstimator(p=p, d=d, q=q, P=P, D=D, Q=Q, s=s)
+
+    def suggest_params(self, trial) -> dict:
+        return {}
+
+
+class ARIMAXAdapter(ModelAdapter):
+    model_id = "arimax_time"
+
+    def make_model(self, params):
+        p = params.get("p", 1)
+        d = params.get("d", 1)
+        q = params.get("q", 1)
+        P = params.get("P", 0)
+        D = params.get("D", 0)
+        Q = params.get("Q", 0)
+        s = params.get("s", 0)
+        return ARIMAXEstimator(p=p, d=d, q=q, P=P, D=D, Q=Q, s=s)
+
+    def suggest_params(self, trial) -> dict:
+        return {}
+
+
 # ── Register all built-in adapters ───────────────────────────────────────────
 
 for _adapter in [
     LinearRegressionAdapter(), RidgeAdapter(), DecisionTreeAdapter(),
     RandomForestAdapter(), GBMAdapter(), AdaBoostAdapter(), MLPAdapter(),
+    ARIMAAdapter(), ProphetAdapter(), SARIMAAdapter(), ARIMAXAdapter(),
 ]:
     ModelRegistry.register(_adapter)
 

@@ -26,9 +26,9 @@ export default function StepBar({ activeStep, unlockedStep, onStepClick }) {
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '8px 14px', borderRadius: 99,
-                border: `1px solid ${active ? 'rgba(99,102,241,0.50)' : done ? 'rgba(16,185,129,0.35)' : 'var(--border-strong)'}`,
-                background: active ? 'rgba(99,102,241,0.12)' : done ? 'rgba(16,185,129,0.08)' : 'transparent',
-                color: active ? '#818cf8' : done ? '#10b981' : locked ? 'var(--text-muted)' : 'var(--text-secondary)',
+                border: `1px solid ${active ? 'var(--accent-border)' : done ? 'rgba(16,185,129,0.35)' : 'var(--border-strong)'}`,
+                background: active ? 'var(--accent-bg)' : done ? 'rgba(16,185,129,0.08)' : 'transparent',
+                color: active ? 'var(--accent)' : done ? '#10b981' : locked ? 'var(--text-muted)' : 'var(--text-secondary)',
                 cursor: locked ? 'not-allowed' : 'pointer',
                 opacity: locked ? 0.45 : 1,
                 transition: 'all 0.2s ease',
@@ -41,7 +41,7 @@ export default function StepBar({ activeStep, unlockedStep, onStepClick }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 11, fontWeight: 700,
                 background: done ? '#10b981' : active ? 'var(--accent)' : 'rgba(148,163,184,0.10)',
-                color: (done || active) ? '#fff' : 'var(--text-muted)',
+                color: done ? '#fff' : active ? 'var(--text-on-accent)' : 'var(--text-muted)',
               }}>
                 {done ? <i className="ti ti-check" style={{ fontSize: 12 }} /> : idx + 1}
               </div>

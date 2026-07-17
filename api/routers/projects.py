@@ -22,6 +22,8 @@ class ProjectCreate(BaseModel):
     results_data: Optional[dict] = None
     instance_count: Optional[int] = 0
     completed: Optional[int] = 0
+    description: Optional[str] = None
+    folder: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -31,6 +33,9 @@ class ProjectUpdate(BaseModel):
     results_data: Optional[dict] = None
     instance_count: Optional[int] = None
     completed: Optional[int] = None
+    description: Optional[str] = None
+    folder: Optional[str] = None
+
 
 
 @router.get("/projects")
@@ -78,7 +83,9 @@ def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
         project_state = body.project_state,
         results_data = body.results_data,
         instance_count = body.instance_count or 0,
-        completed = body.completed or 0
+        completed = body.completed or 0,
+        description = body.description,
+        folder = body.folder
     )
     db.add(project)
     db.commit()
@@ -118,6 +125,10 @@ def update_project(project_id: str, body: ProjectUpdate, db: Session = Depends(g
         project.instance_count = body.instance_count
     if body.completed is not None:
         project.completed = body.completed
+    if body.description is not None:
+        project.description = body.description
+    if body.folder is not None:
+        project.folder = body.folder
     
     project.updated_at = datetime.utcnow()
     db.commit()
@@ -149,4 +160,6 @@ def _row_to_dict(row: Project) -> dict:
         "results_data": row.results_data,
         "instance_count": row.instance_count,
         "completed": row.completed,
+        "description": row.description,
+        "folder": row.folder,
     }

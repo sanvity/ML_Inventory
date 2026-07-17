@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.db import create_tables
-from api.routers import auth, column_stats, history, predict, projects, train, upload
+from api.routers import auth, history, predict, projects, train, upload
 
 
 @asynccontextmanager
@@ -26,10 +26,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS (allow the Vite dev server on port 3000) ────────────────────────────
+# ── CORS (allow the Vite dev server) ────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,7 +47,6 @@ app.include_router(train.router,        prefix="/api", tags=["Training"])
 app.include_router(predict.router,      prefix="/api", tags=["Prediction"])
 app.include_router(history.router,      prefix="/api", tags=["History"])
 app.include_router(projects.router,     prefix="/api", tags=["Projects"])
-app.include_router(column_stats.router, prefix="/api", tags=["Stats"])
 
 
 @app.get("/")

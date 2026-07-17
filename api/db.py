@@ -74,11 +74,25 @@ class Project(Base):
     # Metadata
     instance_count = Column(Integer, nullable=False, default=0)
     completed     = Column(Integer, nullable=False, default=0)  # 0 = in-progress, 1 = completed
+    description   = Column(String, nullable=True)
+    folder        = Column(String, nullable=True)
 
 
 def create_tables():
     """Called at app startup to ensure tables exist."""
     Base.metadata.create_all(bind=engine)
+    
+    # Run migrations for description and folder columns
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT;"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN folder TEXT;"))
+        except Exception:
+            pass
 
 
 def get_db():

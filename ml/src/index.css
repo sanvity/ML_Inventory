@@ -2,56 +2,561 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom spacing overrides for a minimal, compact look */
+/* ============================================================
+   LOVABLE-STYLE DESIGN TOKENS
+   Warm minimal aesthetic: cream backgrounds, soft borders,
+   generous radius, clean typography. EY Gold accent preserved.
+   ============================================================ */
+
+/* ── Border-radius scale ───────────────────────────────────── */
+:root {
+  --radius-xs:  4px;
+  --radius-sm:  8px;
+  --radius-md:  12px;
+  --radius-lg:  16px;
+  --radius-xl:  20px;
+  --radius-2xl: 24px;
+}
+
+/* ── Light Mode ─────────────────────────────────────────────── */
+:root {
+  /* Backgrounds — warm cream instead of cold grey */
+  --bg-base:    #f9f8f6;   /* Lovable's warm page cream */
+  --bg-surface: #ffffff;
+  --bg-raised:  #ffffff;
+  --bg-hover:   #f2f1ee;   /* warm hover */
+  --bg-overlay: #f5f4f1;
+
+  /* Text — warm blacks, not cold slate */
+  --text-primary:   #1a1814;
+  --text-secondary: #40392e;
+  --text-muted:     #8c857a;
+
+  /* Borders — barely visible, warm-tinted */
+  --border:        rgba(28, 22, 14, 0.07);
+  --border-strong: rgba(28, 22, 14, 0.14);
+
+  /* EY Gold accent — unchanged */
+  --accent:              #FFDF00;
+  --accent-light:        #FFDF00;
+  --accent-bg:           rgba(255, 223, 0, 0.08);
+  --accent-border:       rgba(255, 223, 0, 0.25);
+  --accent-border-strong:rgba(255, 223, 0, 0.40);
+  --text-on-accent:      #000000;
+
+  /* Shadows — soft, warm */
+  --shadow-xs: 0 1px 2px rgba(28, 22, 14, 0.05);
+  --shadow-sm: 0 1px 3px rgba(28, 22, 14, 0.07), 0 1px 2px rgba(28, 22, 14, 0.04);
+  --shadow-md: 0 4px 12px rgba(28, 22, 14, 0.08), 0 1px 3px rgba(28, 22, 14, 0.05);
+  --shadow-lg: 0 10px 32px rgba(28, 22, 14, 0.10), 0 4px 8px rgba(28, 22, 14, 0.06);
+  --shadow-xl: 0 20px 48px rgba(28, 22, 14, 0.12), 0 8px 16px rgba(28, 22, 14, 0.07);
+
+  /* Error colors */
+  --error:    #c8392a;
+  --error-bg: rgba(200, 57, 42, 0.07);
+}
+
+/* ── Dark Mode ──────────────────────────────────────────────── */
+.dark, body.dark, :root.dark {
+  /* Backgrounds — warm near-blacks (Lovable dark: #1c1c1c) */
+  --bg-base:    #161412;   /* warm near-black page */
+  --bg-surface: #1e1c19;   /* warm surface */
+  --bg-raised:  #242118;   /* warm card */
+  --bg-hover:   #2c2923;   /* warm hover */
+  --bg-overlay: #242118;
+
+  /* Text — warm whites */
+  --text-primary:   #f5f3ee;
+  --text-secondary: #d4cfc5;
+  --text-muted:     #8a847a;
+
+  /* Borders — subtle warm */
+  --border:        rgba(245, 240, 228, 0.08);
+  --border-strong: rgba(245, 240, 228, 0.16);
+
+  /* EY Yellow accent in dark */
+  --accent:              #FFE600;
+  --accent-light:        #FFF066;
+  --accent-bg:           rgba(255, 230, 0, 0.10);
+  --accent-border:       rgba(255, 230, 0, 0.25);
+  --accent-border-strong:rgba(255, 230, 0, 0.40);
+  --text-on-accent:      #000000;
+
+  /* Shadows — dark warm */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.35), 0 4px 8px rgba(0, 0, 0, 0.20);
+  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.45), 0 8px 16px rgba(0, 0, 0, 0.25);
+
+  --error:    #f87171;
+  --error-bg: rgba(248, 113, 113, 0.10);
+}
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  transition: background-color 0.25s ease, color 0.25s ease;
+  margin: 0;
+}
+
+/* Heading scale — Lovable uses medium weight, not heavy bold */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+/* ============================================================
+   INPUTS, SELECTS, TEXTAREAS
+   ============================================================ */
+
+input, select, textarea {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-sm) !important;
+  font-family: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent) !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px var(--accent-bg) !important;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  border-radius: 3px !important;
+}
+
+/* ============================================================
+   SCROLLBARS — Lovable uses 8px, warm-tinted thumb
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ============================================================
+   BACKGROUND COLOR OVERRIDES
+   Maps Tailwind slate → warm EY/Lovable tokens
+   ============================================================ */
+
+body,
+.bg-slate-50,
+.dark .dark\:bg-slate-950,
+.dark .bg-slate-950 {
+  background-color: var(--bg-base) !important;
+}
+
+.dark .dark\:bg-slate-900,
+.dark .bg-slate-900,
+.dark .bg-slate-800,
+.dark .dark\:bg-slate-800,
+.bg-white,
+.bg-card {
+  background-color: var(--bg-surface) !important;
+}
+
+.dark .dark\:bg-slate-850,
+.dark .bg-slate-850,
+.dark .dark\:bg-slate-950\/20,
+.dark .dark\:bg-slate-850 {
+  background-color: var(--bg-raised) !important;
+}
+
+/* ============================================================
+   TEXT COLOR OVERRIDES
+   ============================================================ */
+
+.text-slate-800,
+.text-slate-700,
+.text-slate-900,
+.dark .dark\:text-slate-100,
+.dark .dark\:text-slate-200,
+.dark .dark\:text-slate-50 {
+  color: var(--text-primary) !important;
+}
+
+.text-slate-500,
+.text-slate-600,
+.dark .dark\:text-slate-400,
+.dark .dark\:text-slate-350 {
+  color: var(--text-secondary) !important;
+}
+
+.text-slate-400,
+.dark .dark\:text-slate-500 {
+  color: var(--text-muted) !important;
+}
+
+/* ============================================================
+   BORDER OVERRIDES
+   ============================================================ */
+
+.border-slate-200,
+.border-slate-100,
+.dark .dark\:border-slate-800,
+.dark .dark\:border-slate-750,
+.border-border,
+.border-slate-700,
+.dark\:border-slate-700 {
+  border-color: var(--border) !important;
+}
+
+.border-slate-300,
+.dark .dark\:border-slate-600 {
+  border-color: var(--border-strong) !important;
+}
+
+/* ============================================================
+   ACCENT / INDIGO → EY GOLD OVERRIDES
+   ============================================================ */
+
+.bg-indigo-600,
+.bg-indigo-500,
+.bg-indigo-700,
+.hover\:bg-indigo-700:hover,
+.hover\:bg-indigo-600:hover,
+.dark .dark\:bg-indigo-600,
+.dark .dark\:bg-indigo-500 {
+  background-color: var(--accent) !important;
+  color: var(--text-on-accent) !important;
+}
+
+.text-indigo-600,
+.text-indigo-500,
+.text-indigo-400,
+.text-indigo-650,
+.text-indigo-550 {
+  color: var(--text-primary) !important;
+}
+
+.dark .dark\:text-indigo-400,
+.dark .dark\:text-indigo-300 {
+  color: var(--accent) !important;
+}
+
+.border-indigo-500,
+.border-indigo-600,
+.dark .dark\:border-indigo-500 {
+  border-color: var(--accent) !important;
+}
+
+.bg-indigo-50\/50,
+.bg-indigo-50,
+.bg-indigo-100,
+.dark .dark\:bg-indigo-950,
+.dark .dark\:bg-indigo-900\/50,
+.dark .dark\:bg-indigo-900\/40,
+.dark .dark\:bg-indigo-900\/30 {
+  background-color: var(--accent-bg) !important;
+}
+
+.text-indigo-800,
+.dark .dark\:text-indigo-200 {
+  color: var(--text-primary) !important;
+}
+
+.focus\:ring-indigo-500:focus,
+.focus\:ring-indigo-600:focus {
+  --tw-ring-color: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
+.bg-indigo-600:hover,
+.bg-indigo-500:hover,
+.bg-indigo-700:hover {
+  opacity: 0.88 !important;
+}
+
+/* ============================================================
+   PURPLE OVERRIDES → EY accent
+   ============================================================ */
+
+.bg-gradient-to-br[class*="to-purple-"],
+.bg-gradient-to-r[class*="to-purple-"],
+.hover\:to-purple-700:hover {
+  background-image: none !important;
+  background-color: var(--accent) !important;
+  color: var(--text-on-accent) !important;
+}
+
+.bg-gradient-to-br[class*="to-purple-"] *,
+.bg-gradient-to-r[class*="to-purple-"] * {
+  color: var(--text-on-accent) !important;
+}
+
+.text-purple-550,
+.text-purple-500,
+.text-purple-600,
+.dark .text-purple-400 {
+  color: var(--accent) !important;
+}
+
+.bg-purple-500\/10,
+.dark .bg-purple-950\/20,
+.bg-purple-50\/50 {
+  background-color: var(--accent-bg) !important;
+}
+
+.border-purple-500 {
+  border-color: var(--accent) !important;
+}
+
+/* ============================================================
+   LOVABLE CARD AESTHETICS
+   Soft shadows, generous radius on panels/cards
+   ============================================================ */
+
+/* Cards — subtle warm shadow instead of flat borders */
+.bg-white.border,
+.dark .bg-slate-900.border,
+[class*="rounded-2xl"],
+[class*="rounded-xl"] {
+  box-shadow: var(--shadow-sm);
+}
+
+/* Lovable-style section panels */
+section,
+aside {
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   TYPOGRAPHY REFINEMENTS
+   ============================================================ */
+
+/* More relaxed paragraph spacing */
+p {
+  line-height: 1.65;
+}
+
+/* Code blocks — warm dark bg in light mode */
+pre, code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', ui-monospace, monospace;
+  font-size: 12px;
+}
+
+pre {
+  background-color: var(--bg-raised) !important;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+/* Table styling — warm minimal */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+th {
+  background-color: var(--bg-hover);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-strong);
+  text-align: left;
+}
+
+td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  vertical-align: top;
+  font-size: 12px;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background-color: var(--bg-hover);
+  transition: background-color 0.1s ease;
+}
+
+/* ============================================================
+   BUTTON BASE REFINEMENTS (Lovable: medium weight, tight radius)
+   ============================================================ */
+
+button {
+  font-family: inherit;
+  letter-spacing: -0.01em;
+}
+
+/* Lovable primary button feel — slightly less aggressive */
+button[class*="bg-indigo"],
+button[class*="bg-accent"] {
+  font-weight: 500;
+  letter-spacing: 0;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+button[class*="bg-indigo"]:hover,
+button[class*="bg-accent"]:hover {
+  transform: translateY(-0.5px);
+}
+
+button[class*="bg-indigo"]:active,
+button[class*="bg-accent"]:active {
+  transform: translateY(0);
+}
+
+/* ============================================================
+   GLOBAL SPACING NORMALIZATION
+   Lovable uses more generous, breathing whitespace
+   ============================================================ */
+
 @layer utilities {
-  .p-8 {
-    padding: 1.25rem !important;
+  /* Slightly more generous than the old cramped overrides */
+  .p-8  { padding: 1.5rem !important; }
+  .p-6  { padding: 1.25rem !important; }
+  .px-6 { padding-left: 1.25rem !important; padding-right: 1.25rem !important; }
+  .py-8 { padding-top: 1.25rem !important; padding-bottom: 1.25rem !important; }
+  .py-6 { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+  .py-4 { padding-top: 0.625rem !important; padding-bottom: 0.625rem !important; }
+  .py-3 { padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; }
+
+  .gap-6 { gap: 1rem !important; }
+  .gap-4 { gap: 0.75rem !important; }
+
+  .space-y-8 > :not([hidden]) ~ :not([hidden]) { margin-top: 1.25rem !important; }
+  .space-y-6 > :not([hidden]) ~ :not([hidden]) { margin-top: 1rem !important; }
+  .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem !important; }
+  .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.625rem !important; }
+  .space-x-6 > :not([hidden]) ~ :not([hidden]) { margin-left: 1rem !important; }
+  .space-x-4 > :not([hidden]) ~ :not([hidden]) { margin-left: 0.75rem !important; }
+}
+
+/* ============================================================
+   TAB2 LAYOUT (two-column main + sticky summary)
+   ============================================================ */
+
+.tab2-main-grid {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .tab2-main-grid {
+    grid-template-columns: 1fr;
   }
-  .p-6 {
-    padding: 1rem !important;
-  }
-  .px-6 {
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
-  }
-  .py-8 {
-    padding-top: 1rem !important;
-    padding-bottom: 1rem !important;
-  }
-  .py-6 {
-    padding-top: 0.75rem !important;
-    padding-bottom: 0.75rem !important;
-  }
-  .py-4 {
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.5rem !important;
-  }
-  .py-3 {
-    padding-top: 0.4rem !important;
-    padding-bottom: 0.4rem !important;
-  }
-  .gap-6 {
-    gap: 0.75rem !important;
-  }
-  .gap-4 {
-    gap: 0.5rem !important;
-  }
-  .space-y-8 > :not([hidden]) ~ :not([hidden]) {
-    margin-top: 1rem !important;
-  }
-  .space-y-6 > :not([hidden]) ~ :not([hidden]) {
-    margin-top: 0.75rem !important;
-  }
-  .space-y-5 > :not([hidden]) ~ :not([hidden]) {
-    margin-top: 0.6rem !important;
-  }
-  .space-y-4 > :not([hidden]) ~ :not([hidden]) {
-    margin-top: 0.5rem !important;
-  }
-  .space-x-6 > :not([hidden]) ~ :not([hidden]) {
-    margin-left: 0.75rem !important;
-  }
-  .space-x-4 > :not([hidden]) ~ :not([hidden]) {
-    margin-left: 0.5rem !important;
-  }
+}
+
+/* ============================================================
+   ANIMATION KEYFRAMES
+   ============================================================ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   FOCUS RING — Lovable-style warm outline
+   ============================================================ */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ============================================================
+   BADGE / PILL BASE
+   ============================================================ */
+
+/* Generic pill tag reset */
+span[style*="border-radius: 99"],
+span[style*="borderRadius: 99"] {
+  font-weight: 500;
+}
+
+/* ============================================================
+   SELECTION COLOR
+   ============================================================ */
+
+::selection {
+  background-color: var(--accent-bg);
+  color: var(--text-primary);
 }

@@ -4,7 +4,7 @@ export default function MetricCard({ label, value, sub, icon, variant = 'default
     success: { border: 'rgba(16,185,129,0.25)',  accent: '#10b981' },
     warning: { border: 'rgba(245,158,11,0.25)',  accent: '#f59e0b' },
     error:   { border: 'rgba(244,63,94,0.25)',   accent: '#f43f5e' },
-    accent:  { border: 'rgba(99,102,241,0.30)',  accent: '#818cf8' },
+    accent:  { border: 'var(--accent-border-strong)',  accent: 'var(--accent)' },
   };
   const v = variants[variant] || variants.default;
   const valueSize = size === 'sm' ? 18 : size === 'lg' ? 32 : 24;

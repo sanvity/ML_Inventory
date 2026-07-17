@@ -418,8 +418,82 @@ We have successfully corrected the dataset name display logic on the project das
 - **Resolved Placeholder bug**: Modified the project save payload builder (`saveProject`) to prioritize `dataset?.name` over `dataset?.filename`.
 - Custom uploaded files and built-in sample datasets now successfully save under their actual names (e.g. `housing`, `marketing.csv`, `operations.xlsx`) instead of displaying as `"Unknown Dataset"` on the **EY ML Studio, My Projects** page.
 
+---
 
+## Results Section Layout Rework & Date/Time Chronological Fix (Current Session)
 
+We have successfully reworked the Results dashboard layout and fixed chronological sorting and formatting on all date-time charts.
+
+### 1. Results Layout Restructuring
+- **Left Panel (Metrics)**: Moved the "Model Evaluation Metrics" panel to the left side (occupying 25% width on desktop view). This gives the panel dedicated horizontal space and prevents it from looking squeezed next to large charts.
+- **Right Panel (Side-by-Side Charts)**: Displayed two primary graphs side-by-side in a single row (lane) on the right side (occupying 75% width on desktop, stacking responsively on mobile):
+  - **"All Models Overlapped"** comparison chart.
+  - **"Predicted vs Actual"** chart.
+- **Forecast Metrics Removal**: Removed the "Forecast Accuracy Metrics" panel entirely from the Results view for the forecasting approach.
+- **Non-Primary Diagnostics Layout**: Maintained all other diagnostics panels (SHAP features, residuals scatter, time-series decomposition, etc.) in a grid section below the primary metrics and charts lane.
+
+### 2. Date/Time Axis Sorting and Formatting
+- **Chronological Sorting**: Re-coded the date sorting algorithm to parse dates using the robust `erParseDateValue` helper instead of standard javascript `Date.parse`, preventing lexicographical fallback sorting which previously scrambled string-formatted dates.
+- **Unified Axis Tick Formatting**: Implemented `formatDateTimeLabel` to parse and format both historical and future projected dates consistently in a `DD-MMM-YYYY` format (e.g. `13-Jul-2026`).
+- **Overlapping/Scrambled Ticks Fix**: Configured `minTickGap={30}` on Recharts `<XAxis />` components across all forecasting charts (line panels and seasonal/trend/residual decomposition charts) to ensure labels dynamically skip and never overlap.
+
+---
+
+## Results Page Layout Rework: Single-Row 4-Card Dashboard (Current Session)
+
+We have successfully refined the layout of the Results page to render a single-row 4-card dashboard.
+
+### 1. Model Evaluation Metrics Card Removal
+- Removed the visual card rendering the Model Evaluation Metrics (`RegressionMetricsSummary`, `ClassificationMetricsSummary`, `ClusteringMetricsSummary`) from the details section of the page.
+- Note: Underlying metrics computation, the model accuracy table at the top of the Results page, and the Training History comparison dialog remain unaffected and fully operational.
+
+### 2. Single-Row Layout Consolidation
+- Re-structured the layout container from a two-row layout to a single horizontal row using a CSS Grid: `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-start`.
+- All 4 insight panels — **All Models Overlapped**, **Predicted vs Actual**, **Residuals Diagnostic Plot** (for regression), and **SHAP Feature Attribution** (for regression) — are now siblings inside this container, lining up side-by-side on desktop views.
+- **Responsive Wrap Fallback**: On tablets and medium viewports, the grid automatically falls back to `md:grid-cols-2` (a balanced 2x2 grid layout), and stacked `grid-cols-1` on mobile to preserve chart readability.
+- **SVG Beeswarm Scaling**: Added horizontal scrollbars to the Beeswarm SHAP chart SVG container if the card shinks below `500px` to maintain text legibility. All Recharts containers resize dynamically.
+
+---
+
+## Results Page: default-open and click-to-expand graph layout (Current Session)
+
+We have successfully refined the Results page graph cards to support default-open and click-to-expand in-place behavior.
+
+### 1. Default Expanded State
+- Configured all 4 insight cards (**All Models Overlapped**, **Predicted vs Actual**, **Residuals Diagnostic Plot**, and **SHAP Feature Attribution**) to render as expanded/open by default on page load.
+- Reusable chevron collapse/expand actions remain fully operational.
+
+### 2. Click-to-Expand In-Place Layout
+- **Flex-based expand/shrink transition**: Re-structured the row container on desktop using a CSS flexrow with a transition: `transition-all duration-300 ease-in-out`.
+  - The clicked card expands to take up **7.5fr (~71.4% row width)**.
+  - The other three cards contract to thin visible strips of **1fr (~9.5% row width)** each.
+  - Minimizing an expanded card returns all 4 cards back to equal **1fr (25% row width)**.
+- **Sparkline optimization for minimized cards**:
+  - Implemented simplified thumbnail view mode for charts when cards are shrunk.
+  - Hides X/Y axis ticks/labels, grid lines, and legends, leaving a clean, recognizable sparkline/scatter plot.
+  - Minimized cards receive a lowered opacity of `0.6` to keep focus on the maximized graph.
+  - Clicking on a shrunk card's canvas or header expands it instantly.
+- **Visual affordance**:
+  - Added dedicated expand/maximize icon buttons (`Maximize2` / `Minimize2` from Lucide) next to the collapse chevron on each header.
+  - Clicking internal controls (tabs, dropdowns) or hovering data points for tooltips will not trigger the expand toggle.
+- **Responsive Wrap Fallback**: On tablet and mobile screens, standard wrapping remains active to preserve chart readability.
+
+---
+
+## Results Page: Repositioned side-by-side layout (Current Session)
+
+We have successfully repositioned the **All Models Overlapped** card to sit to the right of the **Model Accuracy Evaluation Metrics** table, and reflowed the remaining cards below.
+
+### 1. Top Row: Metrics Table + All Models Overlapped Side-by-Side
+- Grouped the Metrics Table and "All Models Overlapped" (or "2D Dimensional Projections" for clustering) panel in a new flex container: `flex flex-col lg:flex-row gap-6 items-start w-full`.
+- **Proportion**: Table wrapper takes `flex: 1.35 1 0%` (~57.4% width), Chart card takes `flex: 1 1 0%` (~42.6% width).
+- **Table size adjustment**: Reduced cell/header paddings (`py-2 px-2.5`) and button padding to save space while keeping numeric metrics and buttons fully visible and clickable without wrapping.
+- **Expand-in-place interaction**: Clicking "All Models Overlapped" expands it in place to `71.4%` width, contracting the metrics table to `28.6%` width.
+
+### 2. Bottom Row: Reflowed Insight Cards
+- The remaining three cards (**Predicted vs Actual**, **Residuals Diagnostic Plot**, and **SHAP Feature Attribution**) reflow into a clean horizontal lane below the top row.
+- **Click-to-Expand compatibility**: Updated card maximize indexing to use unique string identifiers (`'overlapped'`, `'primary_viz'`, etc.) so repositioning does not affect interaction state.
+- **Dynamic Flex Allocation**: Automatically calculates the maximized flex-grow factor based on the number of cards `N` in the bottom row (flex-grow = `2.5 * (N - 1)`), guaranteeing the maximized card occupies exactly **71.4%** of the bottom row's width across all tasks.
 
 
 

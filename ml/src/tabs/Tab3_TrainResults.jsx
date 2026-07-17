@@ -37,6 +37,55 @@ function getInterpretation(metricName, value) {
   return '';
 }
 
+
+function AccuracyAndConfidencePanel({ metrics, confidenceLevel = 0.95 }) {
+  const accuracyPct = metrics.accuracy_pct;
+  if (accuracyPct === undefined || accuracyPct === null) return null;
+
+  const best = metrics.ci_best;
+  const worst = metrics.ci_worst;
+  const average = metrics.ci_average;
+  const lower = metrics.ci_lower;
+  const upper = metrics.ci_upper;
+
+  return (
+    <div style={{
+      marginTop: 16, padding: '14px 18px', borderRadius: 12,
+      background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)',
+      display: 'flex', flexDirection: 'column', gap: 10,
+      marginBottom: 20,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>Accuracy %</span>
+        <strong style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)' }}>{parseFloat(accuracyPct).toFixed(1)}%</strong>
+      </div>
+      {best !== undefined && worst !== undefined && average !== undefined && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12,
+          paddingTop: 10, borderTop: '1px solid var(--border)',
+          fontSize: 11, color: 'var(--text-secondary)'
+        }}>
+          <div>
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 2 }}>Best Accuracy</span>
+            <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{parseFloat(best).toFixed(1)}%</strong>
+          </div>
+          <div>
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 2 }}>Worst Accuracy</span>
+            <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{parseFloat(worst).toFixed(1)}%</strong>
+          </div>
+          <div>
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 2 }}>Average ({Math.round(confidenceLevel * 100)}% CI)</span>
+            <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+              {parseFloat(average).toFixed(1)}% <span style={{ fontSize: 9, fontWeight: 400, color: 'var(--text-muted)', marginLeft: 4 }}>[{parseFloat(lower).toFixed(1)}% – {parseFloat(upper).toFixed(1)}%]</span>
+            </strong>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ── Training Progress Screen ────────────────────────────────────────────────────
 function TrainingScreen({ models, progress, friendlyMsg, confirmedModels = [] }) {
   const overall = models.length
@@ -198,8 +247,8 @@ function ResultsDashboard({ results, featureImportance, forecast, pipelineReport
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
             scales: {
-              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, title: { display: true, text: 'Actual', color: '#94a3b8' } },
-              y: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, title: { display: true, text: 'Predicted', color: '#94a3b8' } },
+              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, title: { display: true, text: 'Actual: ' + (config.target || ''), color: '#94a3b8', font: { size: 11, weight: 'bold' } } },
+              y: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, title: { display: true, text: 'Predicted: ' + (config.target || ''), color: '#94a3b8', font: { size: 11, weight: 'bold' } } },
             },
           },
         });
@@ -227,7 +276,7 @@ function ResultsDashboard({ results, featureImportance, forecast, pipelineReport
             indexAxis: 'y', responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: {
-              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, title: { display: true, text: 'Importance Score', color: '#94a3b8', font: { size: 11, weight: 'bold' } } },
               y: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 11 } } },
             },
           },
@@ -259,8 +308,8 @@ function ResultsDashboard({ results, featureImportance, forecast, pipelineReport
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
             scales: {
-              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'Predicted', color: '#94a3b8' } },
-              y: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'Residual (Actual - Predicted)', color: '#94a3b8' } },
+              x: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'Predicted: ' + (config.target || ''), color: '#94a3b8', font: { size: 11, weight: 'bold' } } },
+              y: { grid: { color: 'rgba(148,163,184,0.06)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'Residual (Actual - Predicted)', color: '#94a3b8', font: { size: 11, weight: 'bold' } } },
             },
           },
         });
@@ -380,6 +429,8 @@ function ResultsDashboard({ results, featureImportance, forecast, pipelineReport
             sub={<HelpTooltip text={r.train_r2 - r.r2 > 0.15 ? '⚠️ Large gap between train and test — the model may be overfitting.' : 'Training and test scores are close — good generalisation.'} />} />
         )}
       </div>
+
+      <AccuracyAndConfidencePanel metrics={r} confidenceLevel={results?.confidence_level || config.confidence_level || 0.95} />
 
       {/* ── Feature Selection Pipeline Report ─────────────────────────── */}
       {pipelineReport && (
@@ -595,17 +646,44 @@ function ResultsDashboard({ results, featureImportance, forecast, pipelineReport
       {/* Charts */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px,1fr))', gap: 20 }}>
         {r.test_predictions && (
-          <ChartCard title="Predicted vs Actual" icon="chart-dots" help="Each dot is a test sample. Points close to the dashed green line = accurate predictions.">
+          <ChartCard
+            title="Predicted vs Actual"
+            icon="chart-dots"
+            help={
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div><strong>What it does:</strong> Plots the true actual target values against the model's predictions on the test set.</div>
+                <div><strong>How to interpret:</strong> The dashed green line is a perfect prediction. The closer the points are to the line, the more accurate the model. Points above the line are over-predicted; points below are under-predicted.</div>
+              </div>
+            }
+          >
             <canvas ref={chartRef} style={{ maxHeight: 250 }} />
           </ChartCard>
         )}
         {featureImportance?.length > 0 && (
-          <ChartCard title="Feature Importance" icon="chart-bar" help="Correlation strength between each feature and the target — taller bars contribute more to the model.">
+          <ChartCard
+            title="Feature Importance"
+            icon="chart-bar"
+            help={
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div><strong>What it does:</strong> Measures how much each input feature contributed to the model's final predictions.</div>
+                <div><strong>How to interpret:</strong> Features are ranked by importance from top to bottom. Longer bars represent variables that have a greater impact on the model's decisions.</div>
+              </div>
+            }
+          >
             <canvas ref={fiRef} style={{ maxHeight: 250 }} />
           </ChartCard>
         )}
         {r.test_predictions && (
-          <ChartCard title="Residual Plot" icon="activity" help="Residuals = actual − predicted. Points near the red dashed line mean small errors. Patterns in the residuals hint at missing features.">
+          <ChartCard
+            title="Residual Plot"
+            icon="activity"
+            help={
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div><strong>What it does:</strong> Plots the prediction error (Residual = Actual - Predicted) against the predicted values.</div>
+                <div><strong>How to interpret:</strong> A good model should have points scattered randomly around the horizontal red line (zero error) with no patterns. Distinct shapes (like a funnel or curve) indicate patterns in error that the model missed.</div>
+              </div>
+            }
+          >
             <canvas ref={residRef} style={{ maxHeight: 250 }} />
           </ChartCard>
         )}
@@ -658,16 +736,17 @@ function RunHistoryPanel({ history, onClose }) {
 
 // ── Tab 3 Root ──────────────────────────────────────────────────────────────────
 export default function Tab3({ sessionId, config, confirmedModels = [], onTryAnother }) {
-  const [phase,     setPhase]     = useState('pretrain');  // pretrain | training | results
-  const [progress,  setProgress]  = useState({});
-  const [results,   setResults]   = useState(null);
-  const [featureImportance, setFI] = useState([]);
-  const [forecast,  setForecast]  = useState([]);
-  const [pipelineReport, setPipelineReport] = useState(null);
-  const [msgIdx,    setMsgIdx]    = useState(0);
-  const [error,     setError]     = useState(null);
-  const [history,   setHistory]   = useState([]);
-  const [showHist,  setShowHist]  = useState(false);
+  const [phase,           setPhase]           = useState('pretrain');  // pretrain | training | results
+  const [progress,        setProgress]        = useState({});
+  const [results,         setResults]         = useState(null);
+  const [featureImportance, setFI]            = useState([]);
+  const [forecast,        setForecast]        = useState([]);
+  const [pipelineReport,  setPipelineReport]  = useState(null);
+  const [msgIdx,          setMsgIdx]          = useState(0);
+  const [error,           setError]           = useState(null);
+  const [history,         setHistory]         = useState([]);
+  const [showHist,        setShowHist]        = useState(false);
+  const [confidenceLevel, setConfidenceLevel] = useState(0.95);  // CI level for forecast bands
   const pollRef = useRef();
   const msgRef  = useRef();
 
@@ -692,7 +771,7 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
     try {
       const r = await fetch(`${API}/api/train`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, ...config }),
+        body: JSON.stringify({ session_id: sessionId, ...config, confidence_level: confidenceLevel }),
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
@@ -788,7 +867,7 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
           </p>
 
           {/* Config pills */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 28 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 20 }}>
             {[
               { label: `${config.features?.length} features`, icon: 'columns-3' },
               { label: `${Math.round((1 - config.split) * 100)}/${Math.round(config.split * 100)} split`, icon: 'divide' },
@@ -808,6 +887,44 @@ export default function Tab3({ sessionId, config, confirmedModels = [], onTryAno
               </span>
             ))}
           </div>
+
+          {/* Confidence Level Picker — only shown for forecasting models */}
+          {config.modality === 'time_series' && (
+            <div style={{
+              marginBottom: 24, padding: '16px 18px', borderRadius: 12,
+              background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.18)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <i className="ti ti-chart-area" style={{ fontSize: 15, color: 'var(--accent)' }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>Forecast Confidence Interval</span>
+                <span style={{
+                  fontSize: 10, padding: '2px 8px', borderRadius: 99,
+                  background: 'rgba(99,102,241,0.12)', color: 'var(--accent)', fontWeight: 600,
+                }}>{Math.round(confidenceLevel * 100)}% CI</span>
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px', lineHeight: 1.5 }}>
+                Sets the width of the best/worst case forecast band. A 95% CI means the true value is expected
+                to fall within the shaded region 95% of the time (applies to ARIMA, SARIMA, ARIMAX).
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[0.80, 0.90, 0.95, 0.99].map(lvl => (
+                  <button
+                    key={lvl}
+                    onClick={() => setConfidenceLevel(lvl)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                      cursor: 'pointer', transition: 'all 0.15s',
+                      background: confidenceLevel === lvl ? 'rgba(99,102,241,0.18)' : 'var(--bg-overlay)',
+                      border: confidenceLevel === lvl ? '1.5px solid var(--accent)' : '1px solid var(--border-strong)',
+                      color: confidenceLevel === lvl ? 'var(--accent)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {Math.round(lvl * 100)}%
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <button onClick={startTraining} style={{
             width: '100%', padding: '14px 24px', borderRadius: 12, border: 'none', fontSize: 15, fontWeight: 700,
@@ -887,7 +1004,7 @@ function ChartCard({ title, icon, help, children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
         <i className={`ti ti-${icon}`} style={{ fontSize: 15, color: 'var(--text-muted)' }} />
         <h4 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{title}</h4>
-        {help && <HelpIcon content={help} />}
+        {help && <HelpIcon content={help} iconType="info" maxWidth={320} />}
       </div>
       <div style={{ height: 250, position: 'relative' }}>{children}</div>
     </div>

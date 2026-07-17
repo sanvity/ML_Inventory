@@ -6,7 +6,7 @@ const VARIANTS = {
   warning: { bg: 'rgba(245,158,11,0.12)',  text: '#f59e0b', border: 'rgba(245,158,11,0.25)' },
   error:   { bg: 'rgba(244,63,94,0.12)',   text: '#f43f5e', border: 'rgba(244,63,94,0.25)'  },
   info:    { bg: 'rgba(56,189,248,0.12)',  text: '#38bdf8', border: 'rgba(56,189,248,0.25)' },
-  accent:  { bg: 'rgba(99,102,241,0.12)',  text: '#818cf8', border: 'rgba(99,102,241,0.25)' },
+  accent:  { bg: 'var(--accent-bg)',        text: 'var(--text-primary)', border: 'var(--accent-border)' },
 };
 
 export default function Badge({ label, variant = 'default', icon, size = 'sm', style = {} }) {

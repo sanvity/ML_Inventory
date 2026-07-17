@@ -211,6 +211,85 @@ function LiveSummary({ config, models = [], rows }) {
   );
 }
 
+// ── Split Data Highlights ───────────────────────────────────────────────────────
+function SplitHighlights({ trainSample, testSample, displayCols, config, MiniTable, trainCount, testCount, totalRows, testFrac }) {
+  const [open, setOpen] = useState(false);
+  const trainPct  = Math.round((1 - testFrac) * 100);
+  const testPct   = Math.round(testFrac * 100);
+
+  return (
+    <div style={{ marginTop: 12, borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+      {/* Header toggle */}
+      <button
+        onClick={() => setOpen(p => !p)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '9px 14px', background: 'var(--bg-raised)', border: 'none', cursor: 'pointer',
+          fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-table-row" style={{ fontSize: 13, color: 'var(--text-muted)' }} />
+          <span>Split Data Highlights</span>
+          {/* Pill counts */}
+          <span style={{ display: 'flex', gap: 5 }}>
+            <span style={{
+              padding: '2px 8px', borderRadius: 99, fontSize: 10, fontWeight: 700,
+              background: 'rgba(16,185,129,0.14)', color: '#10b981'
+            }}>
+              Train — {trainCount.toLocaleString()} rows ({trainPct}%)
+            </span>
+            <span style={{
+              padding: '2px 8px', borderRadius: 99, fontSize: 10, fontWeight: 700,
+              background: 'rgba(99,102,241,0.13)', color: '#818cf8'
+            }}>
+              Test — {testCount.toLocaleString()} rows ({testPct}%)
+            </span>
+          </span>
+        </div>
+        <i className={`ti ti-chevron-${open ? 'up' : 'down'}`} style={{ fontSize: 13, color: 'var(--text-muted)' }} />
+      </button>
+
+      {/* Collapsible body */}
+      {open && (
+        <div style={{ padding: '12px 14px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 10, color: 'var(--text-muted)', margin: 0 }}>
+            Showing sample rows from each partition (target column highlighted). Columns shown: {displayCols.join(', ')}.
+          </p>
+
+          {/* Train sample */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block'
+              }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981' }}>Training Set</span>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>— first {trainSample.length} rows of {trainCount.toLocaleString()} total</span>
+            </div>
+            <MiniTable rows={trainSample} accent="#10b981" />
+          </div>
+
+          {/* Test sample */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', background: '#818cf8', display: 'inline-block'
+              }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8' }}>Test Set</span>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>— last {testSample.length} rows of {testCount.toLocaleString()} total</span>
+            </div>
+            <MiniTable rows={testSample} accent="#818cf8" />
+          </div>
+
+          <p style={{ fontSize: 10, color: 'var(--text-muted)', margin: 0, fontStyle: 'italic' }}>
+            ⓘ Preview rows are drawn from the uploaded dataset before shuffling. Actual split assignment depends on the chosen split method.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Tab 2 Root ──────────────────────────────────────────────────────────────────
 export default function Tab2({ session, config, setConfig, confirmedModels = [], onContinue }) {
   const cols   = session?.columns ?? [];
@@ -483,6 +562,78 @@ export default function Tab2({ session, config, setConfig, confirmedModels = [],
                   Test ({Math.round(session?.rows * (config.split ?? 0.2)).toLocaleString()})
                 </div>
               </div>
+
+              {/* Split Data Highlights */}
+              {(() => {
+                const preview = session?.preview ?? [];
+                const totalRows = session?.rows ?? preview.length;
+                const testFrac = config.split ?? 0.2;
+                const trainCount = Math.round(totalRows * (1 - testFrac));
+                // From the preview array, approximate train = first rows, test = last rows
+                const previewLen = preview.length;
+                const splitIdx = Math.round(previewLen * (1 - testFrac));
+                const trainSample = preview.slice(0, Math.min(3, splitIdx));
+                const testSample  = preview.slice(Math.max(0, splitIdx - 1)).slice(-3);
+                // Display columns: selected features + target, fall back to all session cols
+                const featCols = (config.features ?? []).filter(f => f !== config.target);
+                const allCols = session?.columns ?? [];
+                const preferredCols = [
+                  ...(config.target ? [config.target] : []),
+                  ...featCols
+                ];
+                const displayCols = (preferredCols.length > 0 ? preferredCols : allCols).slice(0, 5);
+                if (!preview.length) return null;
+
+                const MiniTable = ({ rows, accent }) => (
+                  <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${accent}30` }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
+                      <thead>
+                        <tr style={{ background: `${accent}12` }}>
+                          {displayCols.map(c => (
+                            <th key={c} style={{
+                              padding: '4px 8px', textAlign: 'left', fontWeight: 700,
+                              color: c === config.target ? accent : 'var(--text-muted)',
+                              whiteSpace: 'nowrap', borderBottom: `1px solid ${accent}25`
+                            }}>
+                              {c === config.target && <i className="ti ti-target" style={{ marginRight: 3, fontSize: 9 }} />}
+                              {c}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${accent}15` }}>
+                            {displayCols.map(c => (
+                              <td key={c} style={{
+                                padding: '4px 8px', fontWeight: c === config.target ? 600 : 400,
+                                color: c === config.target ? accent : 'var(--text-secondary)',
+                                whiteSpace: 'nowrap', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis'
+                              }}>
+                                {row[c] == null ? <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>—</span> : String(row[c])}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+
+                return (
+                  <SplitHighlights
+                    trainSample={trainSample}
+                    testSample={testSample}
+                    displayCols={displayCols}
+                    config={config}
+                    MiniTable={MiniTable}
+                    trainCount={trainCount}
+                    testCount={Math.round(totalRows * testFrac)}
+                    totalRows={totalRows}
+                    testFrac={testFrac}
+                  />
+                );
+              })()}
             </div>
 
             {/* Split method */}

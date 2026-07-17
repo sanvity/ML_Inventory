@@ -3,13 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f9f8f6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#161412" media="(prefers-color-scheme: dark)" />
     <title>ML Playground — No-Code Machine Learning</title>
     <meta name="description" content="ML Playground: go from raw data to trained model in three guided steps. No coding required." />
 
     <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=optional" rel="stylesheet" />
 
     <!-- Tabler Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
@@ -28,12 +30,12 @@
               sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
             },
             colors: {
-              base:    '#09090b',
-              surface: '#111113',
-              raised:  '#18181b',
-              overlay: '#1e1e26',
-              border:  'rgba(148,163,184,0.08)',
-              accent:  { DEFAULT: '#6366f1', light: '#818cf8', bg: 'rgba(99,102,241,0.10)' },
+              base:    'var(--bg-base)',
+              surface: 'var(--bg-surface)',
+              raised:  'var(--bg-raised)',
+              overlay: 'var(--bg-overlay)',
+              border:  'var(--border)',
+              accent:  { DEFAULT: 'var(--accent)', light: 'var(--accent-light)', bg: 'var(--accent-bg)' },
             },
             animation: {
               'fade-in':      'fadeIn 0.25s ease',

@@ -3,10 +3,10 @@ import { MODELS_BY_CATEGORY, SPEED_BADGE_STYLES } from '../data/modelRegistry.js
 import Badge from './ui/Badge.jsx';
 
 const CAT_COLOR = {
-  supervised:   '#6366f1',
-  unsupervised: '#10b981',
-  timeseries:   '#f59e0b',
-  simulation:   '#f43f5e',
+  supervised:   '#FFE600',
+  unsupervised: '#C4C4CD',
+  timeseries:   '#747480',
+  simulation:   '#5C768D',
 };
 
 export default function Sidebar({ onModelSelect, selectedModelIds = [], onClose }) {
